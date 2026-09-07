@@ -44,7 +44,7 @@ export function workFolderService(db: Db, storage: StorageProvider) {
     const [saved] = await db.select({ at: max(workFileOperations.createdAt) }).from(workFileOperations)
       .where(and(eq(workFileOperations.companyId, folder.companyId), eq(workFileOperations.folderId, folder.id)));
     return { id: folder.id, owner: { companyId: folder.companyId, scope: folder.scope, ownerId: folder.ownerId },
-      lastSavedAt: saved?.at?.toISOString() ?? null,
+      lastOperationAt: saved?.at?.toISOString() ?? null,
       files: rows.slice(0, limit).map(workFileDto), nextCursor: rows.length > limit ? rows[limit - 1]!.id : null };
   }
 

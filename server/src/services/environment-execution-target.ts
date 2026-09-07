@@ -372,6 +372,8 @@ export async function resolveEnvironmentExecutionTarget(input: {
       providerKey: parsed.config.provider,
       shellCommand,
       remoteCwd,
+      ...(typeof input.leaseMetadata?.workFolderHome === "string"
+        ? { workFolderHome: input.leaseMetadata.workFolderHome } : {}),
       enableSandboxDuplexBridge,
       runnerLifecyclePolicy:
         parsed.config.runnerLifecycleMode === "warm"

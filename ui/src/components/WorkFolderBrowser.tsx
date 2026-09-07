@@ -71,8 +71,10 @@ export function WorkFolderBrowser({ owner, exampleFiles }: { owner: WorkFolderOw
   const statuses = syncQuery.data ?? [];
   const failed = statuses.find((status) => status.state === "failed");
   const saving = mutation.isPending || statuses.some((status) => status.state === "saving");
-  const lastSaved = [...statuses.map((status) => status.lastSavedAt), filesQuery.data?.lastSavedAt]
+  const lastSaved = statuses.map((status) => status.lastSavedAt)
     .filter((value): value is string => Boolean(value)).sort().at(-1);
+  const lastOperation = filesQuery.data?.lastOperationAt;
+  const saveFailed = Boolean(failed) || mutation.isError;
   const disabled = mutation.isPending || Boolean(exampleFiles);
   return <div className="flex min-h-0 flex-col gap-3">
     <div className="flex flex-wrap items-center gap-2">
@@ -83,7 +85,9 @@ export function WorkFolderBrowser({ owner, exampleFiles }: { owner: WorkFolderOw
       }} />
       <Button variant={trash ? "secondary" : "outline"} size="sm" onClick={() => { setTrash(!trash); setSelectedPath(null); }}><Trash2 aria-hidden />{trash ? "Back to files" : "Trash"}</Button>
       <Button variant="outline" size="sm" disabled={disabled || !statuses.some((status) => status.active)} onClick={() => mutation.mutate({ type: "refresh" })}><RefreshCw aria-hidden />Refresh sandbox</Button>
-      <span className="text-xs text-muted-foreground" role="status">{saving ? "Saving…" : failed ? "Save failed" : lastSaved ? `Saved ${new Date(lastSaved).toLocaleTimeString()}` : "Saved files"}</span>
+      <span className="text-xs text-muted-foreground" role="status">{saving ? "Saving…" : saveFailed ? "Save failed" : "Saved"}</span>
+      {lastSaved && <span className="text-xs text-muted-foreground">Last agent save {new Date(lastSaved).toLocaleTimeString()}</span>}
+      {lastOperation && (!lastSaved || lastOperation > lastSaved) && <span className="text-xs text-muted-foreground">Files updated {new Date(lastOperation).toLocaleTimeString()}</span>}
     </div>
     {!trash && <div className="flex flex-wrap items-end gap-2">
       <div className="flex-1 space-y-1"><Label htmlFor={directoryId}>Folder path</Label><Input id={directoryId} value={directory} onChange={(event) => setDirectory(event.target.value)} placeholder="Root folder" /></div>

@@ -27,7 +27,8 @@ export interface WorkFolderListing {
   owner: WorkFolderOwner;
   files: WorkFile[];
   nextCursor: string | null;
-  lastSavedAt: string | null;
+  /** Last accepted file operation, including deletion, restore, and retries. */
+  lastOperationAt: string | null;
 }
 
 export interface WorkFolderSyncStatus {
