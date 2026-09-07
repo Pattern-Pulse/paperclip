@@ -321,7 +321,7 @@ export async function prepareSandboxWorkFolders(input: {
   return { manifest, home, identityChanged, primaryRepo: bindings.find(({ binding }) => manifest.repositories.some((repo) => repo.bindingId === binding.id && repo.primary))?.root ?? bindings[0]?.root ?? paths.task!,
     env: { HOME: home, AGENT_HOME: paths.agent!, PAPERCLIP_PRIMARY_REPO: bindings.find(({ binding }) => manifest.repositories.some((repo) => repo.bindingId === binding.id && repo.primary))?.root ?? bindings[0]?.root ?? paths.task!, PAPERCLIP_TASK_DIR: paths.task!, PAPERCLIP_AGENT_DIR: paths.agent!,
       PAPERCLIP_USER_DIR: paths.user!, PAPERCLIP_PROJECT_DIR: paths.project!, PAPERCLIP_REPOS_DIR: paths.repos! },
-    flush: checkpointer.flush, stop: async () => {
+    flush: checkpointer.flush, stop: async (beforeCompletion?: () => Promise<void>) => {
       await checkpointer.stop();
       const [run] = await db.select({ refreshRequested: workFolderRuns.refreshRequested }).from(workFolderRuns)
         .where(eq(workFolderRuns.runId, input.runId));
@@ -333,6 +333,9 @@ export async function prepareSandboxWorkFolders(input: {
         await db.update(workFolderRuns).set({ refreshRequested: false, baselines, updatedAt: new Date() })
           .where(eq(workFolderRuns.runId, input.runId));
       }
+      // Native resume identity must be published after the data is durable,
+      // but before completion can release a new turn onto this sandbox.
+      await beforeCompletion?.();
       manifest.finalCheckpointAt = new Date().toISOString();
       await saveState("saved");
     } };

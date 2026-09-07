@@ -111,9 +111,17 @@ describe("shared sandbox work-folder lifecycle", () => {
     await run.flush();
     const [before] = await db.select().from(workFolderRuns).where(eq(workFolderRuns.runId, run.manifest.runId));
     await fs.writeFile(path.join(run.home, "task/activity-proof.txt"), "saved after logging recovers");
+    const beforeCompletion = vi.fn(async () => {
+      const [state] = await db.select().from(workFolderRuns).where(eq(workFolderRuns.runId, run.manifest.runId));
+      expect(state?.state).toBe("saved");
+      expect(state?.manifest.finalCheckpointAt).toBeUndefined();
+      const folder = await workFolderService(db, storage).ensure({ companyId, scope: "task", ownerId: taskId });
+      expect((await workFolderService(db, storage).list(folder)).files.some((file) => file.path === "activity-proof.txt")).toBe(true);
+    });
     const activity = vi.spyOn(activityLog, "logActivity").mockRejectedValue(new Error("activity unavailable"));
     try {
-      await expect(run.stop()).rejects.toThrow("activity unavailable");
+      await expect(run.stop(beforeCompletion)).rejects.toThrow("activity unavailable");
+      expect(beforeCompletion).not.toHaveBeenCalled();
       const [state] = await db.select().from(workFolderRuns).where(eq(workFolderRuns.runId, run.manifest.runId));
       expect(state?.state).toBe("failed");
       expect(state?.lastSavedAt).toEqual(before?.lastSavedAt);
@@ -121,9 +129,11 @@ describe("shared sandbox work-folder lifecycle", () => {
       expect((await workFolderService(db, storage).list(folder)).files.some((file) => file.path === "activity-proof.txt")).toBe(false);
       expect(await fs.readFile(path.join(run.home, "task/activity-proof.txt"), "utf8")).toBe("saved after logging recovers");
     } finally { activity.mockRestore(); }
-    await run.stop(); active.splice(active.indexOf(run), 1);
+    await run.stop(beforeCompletion); active.splice(active.indexOf(run), 1);
+    expect(beforeCompletion).toHaveBeenCalledTimes(1);
     const [saved] = await db.select().from(workFolderRuns).where(eq(workFolderRuns.runId, run.manifest.runId));
     expect(saved?.state).toBe("saved");
+    expect(saved?.manifest.finalCheckpointAt).toBeTruthy();
     expect(saved!.lastSavedAt!.getTime()).toBeGreaterThan(before!.lastSavedAt!.getTime());
     const folder = await workFolderService(db, storage).ensure({ companyId, scope: "task", ownerId: taskId });
     expect((await workFolderService(db, storage).list(folder)).files.some((file) => file.path === "activity-proof.txt")).toBe(true);
