@@ -28,7 +28,22 @@ afterEach(async () => {
   children.clear();
 });
 
-describe("Codex ACPX runtime sidecar", () => {
+describe("qualified ACPX runtime sidecar", () => {
+  it("shuts down without using readline after stdin closes", async () => {
+    const sidecar = startSidecar();
+    sidecar.write(initializeRequest(1, "codex"));
+    await expect(
+      sidecar.next((frame) => frame.id === 1),
+    ).resolves.toMatchObject({
+      id: 1,
+      ok: true,
+    });
+
+    await sidecar.close();
+
+    expect(sidecar.stderr()).not.toContain("ERR_USE_AFTER_CLOSE");
+  });
+
   it("keeps session admission closed while any cleanup owner remains", () => {
     const cleanup = Promise.resolve();
 
@@ -428,9 +443,31 @@ describe("Codex ACPX runtime sidecar", () => {
     });
   });
 
+  it.each([["claude", "claude-sonnet-5"]])(
+    "reports the qualified %s profile",
+    async (agent, model) => {
+      const sidecar = startSidecar();
+      sidecar.write(initializeRequest(1, agent, model));
+
+      await expect(
+        sidecar.next((frame) => frame.id === 1),
+      ).resolves.toMatchObject({
+        id: 1,
+        ok: true,
+        result: { profile: { agent, qualificationModel: model } },
+      });
+    },
+  );
+
   it("fails closed after an unsupported provider bootstrap", async () => {
     const sidecar = startSidecar();
-    sidecar.write(initializeRequest(1, "pi"));
+    sidecar.write(
+      initializeRequest(
+        1,
+        "pi",
+        "openrouter/deepseek/deepseek-v4-flash-0731",
+      ),
+    );
 
     await expect(
       sidecar.next((frame) => frame.id === 1),
@@ -439,7 +476,7 @@ describe("Codex ACPX runtime sidecar", () => {
       ok: false,
       error: {
         code: "acpx_sidecar_command_failed",
-        message: "This production ACPX sidecar supports Codex only",
+        message: "ACPX agent must be claude or codex",
         retryable: false,
       },
     });
@@ -461,12 +498,16 @@ describe("Codex ACPX runtime sidecar", () => {
   });
 });
 
-function initializeRequest(id: number, agent: string): Record<string, unknown> {
+function initializeRequest(
+  id: number,
+  agent: string,
+  model = "gpt-5.6-sol",
+): Record<string, unknown> {
   return {
     protocolVersion: ACPX_SIDECAR_PROTOCOL_VERSION,
     id,
     command: "initialize",
-    params: { agent, model: "gpt-5.6-sol" },
+    params: { agent, model },
   };
 }
 

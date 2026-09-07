@@ -31,6 +31,7 @@ fn config(mode: &str) -> AcpxProviderSessionConfig {
         transport: AcpxSidecarTransportConfig {
             command: PathBuf::from(env!("CARGO_BIN_EXE_fake-acpx-sidecar")),
             args: vec!["--mode".to_owned(), mode.to_owned()],
+            verified_launch: None,
             request_timeout: Duration::from_secs(1),
             shutdown_grace: Duration::from_millis(100),
         },
@@ -61,6 +62,7 @@ fn expected_identity() -> AcpxProviderSessionIdentity {
         requested_model: "gpt-5.6-sol".to_owned(),
         effective_model: "gpt-5.6-sol".to_owned(),
         permission_mode: Some(AcpxPermissionMode::ApproveReads),
+        provider_lifetime_fence_candidates: [60_001, 60_002, 60_003],
     }
 }
 
@@ -87,10 +89,10 @@ fn bootstraps_a_codex_session_and_confirms_run_identity() {
 }
 
 #[test]
-fn validates_codex_policy_and_tool_catalog_before_spawning() {
+fn validates_qualified_policy_and_tool_catalog_before_spawning() {
     let mut invalid_agent = config("bootstrap");
-    invalid_agent.agent = "opencode".to_owned();
-    assert!(start_error(&invalid_agent).contains("Codex only"));
+    invalid_agent.agent = "pi".to_owned();
+    assert!(start_error(&invalid_agent).contains("claude or codex"));
 
     let mut unpinned = config("bootstrap");
     unpinned.permission_mode_pinned = false;
@@ -99,6 +101,30 @@ fn validates_codex_policy_and_tool_catalog_before_spawning() {
     let mut invalid_tools = config("bootstrap");
     invalid_tools.tool_set.catalog_digest = "invalid".to_owned();
     assert!(start_error(&invalid_tools).contains("authorized tools"));
+
+    let mut invalid_lifetime_fence = config("bootstrap");
+    let mut invalid_identity = expected_identity();
+    invalid_identity.provider_lifetime_fence_candidates = [60_001, 60_001, 60_003];
+    invalid_lifetime_fence.expected_identity = Some(invalid_identity);
+    assert!(start_error(&invalid_lifetime_fence).contains("lifetime fence candidates"));
+}
+
+#[test]
+fn admits_each_exact_qualified_agent_model_pair() {
+    for (agent, model) in [("codex", "gpt-5.6-sol"), ("claude", "claude-sonnet-5")] {
+        let mut qualified = config("bootstrap");
+        qualified.agent = agent.to_owned();
+        qualified.model = model.to_owned();
+        qualified.validate().unwrap();
+    }
+
+    let mut drifted = config("bootstrap");
+    drifted.agent = "claude".to_owned();
+    assert!(drifted
+        .validate()
+        .unwrap_err()
+        .to_string()
+        .contains("exact model"));
 }
 
 #[test]

@@ -13,6 +13,8 @@ use serde_json::{json, Value};
 struct FakeState {
     thread_id: String,
     active_turn_id: Option<String>,
+    #[serde(default)]
+    next_turn: u64,
 }
 
 fn argument(args: &[String], name: &str) -> Option<String> {
@@ -29,6 +31,48 @@ fn send(value: Value) -> io::Result<()> {
     stdout.flush()
 }
 
+fn send_split_event_burst(state: &FakeState) -> io::Result<()> {
+    let turn_id = state.active_turn_id.as_deref().unwrap_or("provider-turn-1");
+    for index in 0..96 {
+        send(json!({
+            "method": "item/agentMessage/delta",
+            "params": {
+                "threadId": state.thread_id,
+                "turnId": turn_id,
+                "itemId": "split-burst-message",
+                "delta": format!("first-{index} "),
+            }
+        }))?;
+    }
+    send(json!({
+        "id": "split-burst-tool",
+        "method": "item/tool/call",
+        "params": {
+            "threadId": state.thread_id,
+            "turnId": turn_id,
+            "callId": "split-burst-semantic-call",
+            "tool": "get_task_context",
+            "arguments": {}
+        }
+    }))
+}
+
+fn finish_split_event_burst(state: &FakeState) -> io::Result<()> {
+    let turn_id = state.active_turn_id.as_deref().unwrap_or("provider-turn-1");
+    for index in 0..48 {
+        send(json!({
+            "method": "item/agentMessage/delta",
+            "params": {
+                "threadId": state.thread_id,
+                "turnId": turn_id,
+                "itemId": "split-burst-message",
+                "delta": format!("second-{index} "),
+            }
+        }))?;
+    }
+    Ok(())
+}
+
 fn load_state(path: &Path) -> FakeState {
     fs::read(path)
         .ok()
@@ -36,6 +80,7 @@ fn load_state(path: &Path) -> FakeState {
         .unwrap_or_else(|| FakeState {
             thread_id: "codex-thread-1".to_owned(),
             active_turn_id: None,
+            next_turn: 0,
         })
 }
 
@@ -288,6 +333,157 @@ fn send_question(state: &FakeState) -> io::Result<()> {
     }))
 }
 
+fn send_runtime_question(state: &FakeState) -> io::Result<()> {
+    let turn_id = state.active_turn_id.as_deref().unwrap_or("provider-turn-1");
+    send(json!({
+        "id": "runtime-request-1",
+        "method": "item/tool/requestUserInput",
+        "params": {
+            "threadId": state.thread_id,
+            "turnId": turn_id,
+            "itemId": "question-item-1",
+            "isBlocking": true,
+            "title": "Deployment input",
+            "questions": [
+                {
+                    "id": "environment",
+                    "header": "Environment",
+                    "question": "Where should we deploy?",
+                    "isOther": true,
+                    "options": [
+                        {"label": "Staging", "description": "Deploy safely."},
+                        {"label": "Production", "description": "Deploy directly."}
+                    ]
+                },
+                {
+                    "id": "regions",
+                    "header": "Region",
+                    "question": "Which region should receive the deployment?",
+                    "options": [
+                        {"label": "us-east-1"},
+                        {"label": "us-west-2"}
+                    ]
+                },
+                {
+                    "id": "notes",
+                    "header": "Notes",
+                    "question": "Add deployment notes."
+                }
+            ]
+        }
+    }))
+}
+
+fn send_opencode_proxy_runtime_question(state: &FakeState) -> io::Result<()> {
+    let turn_id = state.active_turn_id.as_deref().unwrap_or("provider-turn-1");
+    send(json!({
+        "id": "opencode-runtime-request-1",
+        "method": "paperclip/runtimeRequest",
+        "params": {
+            "request": {
+                "schema": "paperclip.runtime_request.v2",
+                "requestKind": "runtime",
+                "requestId": "opencode-question-1",
+                "type": "input",
+                "status": "pending",
+                "prompt": "OpenCode requests user input.",
+                "input": {
+                    "schema": "paperclip.question_set.v1",
+                    "questions": [{
+                        "id": "environment",
+                        "prompt": "Where should we deploy?",
+                        "required": true,
+                        "answerMode": "single_select",
+                        "options": [
+                            {"id": "staging", "label": "Staging"},
+                            {"id": "production", "label": "Production"}
+                        ]
+                    }]
+                },
+                "origin": {
+                    "adapter": "opencode-server",
+                    "provider": "opencode",
+                    "method": "question.asked"
+                },
+                "turnId": turn_id,
+                "itemId": "opencode-question-1"
+            }
+        }
+    }))
+}
+
+fn send_runtime_elicitation(state: &FakeState) -> io::Result<()> {
+    let turn_id = state.active_turn_id.as_deref().unwrap_or("provider-turn-1");
+    send(json!({
+        "id": "runtime-elicitation-1",
+        "method": "mcpServer/elicitation/request",
+        "params": {
+            "threadId": state.thread_id,
+            "turnId": turn_id,
+            "itemId": "elicitation-item-1",
+            "message": "Choose typed deployment settings.",
+            "requestedSchema": {
+                "type": "object",
+                "required": ["approved", "environment", "regions", "replicas"],
+                "properties": {
+                    "environment": {"type": "string", "enum": ["staging", "production"]},
+                    "regions": {"type": "array", "items": {"type": "string"}},
+                    "replicas": {"type": "integer", "minimum": 1, "maximum": 10},
+                    "approved": {"type": "boolean"}
+                }
+            }
+        }
+    }))
+}
+
+fn send_structured_activity(state: &FakeState) -> io::Result<()> {
+    let turn_id = state.active_turn_id.as_deref().unwrap_or("provider-turn-1");
+    send(json!({
+        "method": "turn/plan/updated",
+        "params": {
+            "threadId": state.thread_id,
+            "turnId": turn_id,
+            "revision": 1,
+            "explanation": "Exercise the structured provider boundary.",
+            "plan": [
+                {"step": "Inspect", "status": "completed"},
+                {"step": "Implement", "status": "inProgress"}
+            ]
+        }
+    }))?;
+    send(json!({
+        "method": "item/started",
+        "params": {
+            "threadId": state.thread_id,
+            "turnId": turn_id,
+            "item": {"id": "reasoning-1", "type": "reasoning", "status": "inProgress"}
+        }
+    }))?;
+    send(json!({
+        "method": "item/completed",
+        "params": {
+            "threadId": state.thread_id,
+            "turnId": turn_id,
+            "item": {"id": "reasoning-1", "type": "reasoning", "status": "completed"}
+        }
+    }))?;
+    send(json!({
+        "method": "item/completed",
+        "params": {
+            "threadId": state.thread_id,
+            "turnId": turn_id,
+            "item": {
+                "id": "command-1",
+                "type": "commandExecution",
+                "status": "completed",
+                "command": "verify",
+                "aggregatedOutput": "verification passed",
+                "exitCode": 0
+            }
+        }
+    }))
+}
+
 fn send_runtime_request_flood(
     state: &FakeState,
     interrupt_count: u64,
@@ -323,6 +519,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         PathBuf::from(argument(&args, "--state-file").ok_or("--state-file is required")?);
     let call_log = argument(&args, "--call-log").map(PathBuf::from);
     let emit_question = args.iter().any(|value| value == "--emit-question");
+    let emit_runtime_question = args.iter().any(|value| value == "--runtime-question");
+    let emit_opencode_proxy_runtime_question = args
+        .iter()
+        .any(|value| value == "--opencode-proxy-runtime-question");
+    let emit_runtime_elicitation = args.iter().any(|value| value == "--runtime-elicitation");
+    let emit_structured_activity = args.iter().any(|value| value == "--structured-activity");
+    let emit_split_event_burst = args.iter().any(|value| value == "--split-event-burst");
+    let require_skill_instructions = args
+        .iter()
+        .any(|value| value == "--include-skill-instructions");
+    let require_codex_home_auth = args
+        .iter()
+        .any(|value| value == "--require-codex-home-auth");
+    let durable_turn_ids = args.iter().any(|value| value == "--durable-turn-ids");
     let emit_tool_call = args.iter().any(|value| value == "--emit-tool-call");
     let replay_completed_tool_call = args
         .iter()
@@ -347,10 +557,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .any(|value| value == "--finish-turn-with-pending-tool");
     let require_dynamic_tool = args.iter().any(|value| value == "--require-dynamic-tool");
+    let require_completion_contract = args
+        .iter()
+        .any(|value| value == "--require-completion-contract");
+    let require_external_sandbox = args
+        .iter()
+        .any(|value| value == "--require-external-sandbox");
     let expected_canonical_task_context = argument(&args, "--expected-canonical-task-context")
         .map(|value| serde_json::from_str::<Value>(&value))
         .transpose()?;
-    let hold_turn = args.iter().any(|value| value == "--hold-turn");
+    let linger_after_turn_start = args
+        .iter()
+        .any(|value| value == "--linger-after-turn-start");
+    let hold_turn = args.iter().any(|value| value == "--hold-turn") || linger_after_turn_start;
     let exit_after_turn_start = args.iter().any(|value| value == "--exit-after-turn-start");
     let exit_after_turn_completion = args
         .iter()
@@ -358,6 +577,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let emit_post_completion_warning = args
         .iter()
         .any(|value| value == "--emit-post-completion-warning");
+    let emit_post_completion_passive_statuses = args
+        .iter()
+        .any(|value| value == "--emit-post-completion-passive-statuses");
+    let emit_post_completion_foreign_turn = args
+        .iter()
+        .any(|value| value == "--emit-post-completion-foreign-turn");
+    let post_completion_notification_gate =
+        argument(&args, "--post-completion-notification-gate").map(PathBuf::from);
     let fail_after_turn_completion = args
         .iter()
         .any(|value| value == "--fail-after-turn-completion");
@@ -449,10 +676,35 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let question_before_failed_turn = args
         .iter()
         .any(|value| value == "--question-before-failed-turn");
+    let fail_turn_immediately = args.iter().any(|value| value == "--fail-turn-immediately");
     let reuse_question_id = args.iter().any(|value| value == "--reuse-question-id");
     let pre_response_notification = args
         .iter()
         .any(|value| value == "--notification-before-response");
+    if require_skill_instructions {
+        let skill_path = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join("skills").join("assigned").join("SKILL.md"))
+            .ok_or("HOME is required for the selected skill fixture")?;
+        if !skill_path.is_file() {
+            return Err(format!(
+                "selected skill instructions were not materialized at {}",
+                skill_path.display()
+            )
+            .into());
+        }
+    }
+    if require_codex_home_auth {
+        let auth_path = std::env::var_os("CODEX_HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join("auth.json"))
+            .ok_or("CODEX_HOME is required for the selected auth fixture")?;
+        if !auth_path.is_file() {
+            return Err(
+                format!("Codex auth was not materialized at {}", auth_path.display()).into(),
+            );
+        }
+    }
     let mut state = load_state(&state_path);
     let mut turn_start_count = 0_u64;
     let mut interrupt_count = 0_u64;
@@ -476,6 +728,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             log_call(call_log.as_deref(), outcome)?;
             continue;
         }
+        if message.get("method").is_none()
+            && message.get("id") == Some(&json!("runtime-elicitation-1"))
+        {
+            finish_turn(&state_path, &mut state, "completed")?;
+            continue;
+        }
+        if message.get("method").is_none()
+            && message.get("id") == Some(&json!("opencode-runtime-request-1"))
+        {
+            if message.pointer("/result/resolution/action") != Some(&json!("submit"))
+                || message.pointer("/result/resolution/response/schema")
+                    != Some(&json!("paperclip.question_response.v1"))
+            {
+                return Err("OpenCode proxy runtime response changed shape".into());
+            }
+            log_call(call_log.as_deref(), "opencode-runtime-response:submitted")?;
+            finish_turn(&state_path, &mut state, "completed")?;
+            continue;
+        }
         if message.get("method").is_none() && message.get("id") == Some(&json!("runtime-request-1"))
         {
             if reuse_question_id && answered_questions == 0 {
@@ -483,6 +754,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 send_question(&state)?;
                 continue;
             }
+            finish_turn(&state_path, &mut state, "completed")?;
+            continue;
+        }
+        if message.get("method").is_none() && message.get("id") == Some(&json!("split-burst-tool"))
+        {
+            if message.pointer("/result/success") != Some(&json!(true)) {
+                return Err("split event burst semantic tool failed".into());
+            }
+            finish_split_event_burst(&state)?;
             finish_turn(&state_path, &mut state, "completed")?;
             continue;
         }
@@ -549,8 +829,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }))?,
             "initialized" => {}
             "thread/start" => {
+                if require_external_sandbox
+                    && (message.pointer("/params/sandbox") != Some(&json!("danger-full-access"))
+                        || message.pointer("/params/permissions").is_some())
+                {
+                    return Err("thread/start omitted the external sandbox boundary".into());
+                }
                 if require_dynamic_tool && !has_task_context_tool(&message) {
                     return Err("thread/start omitted the authorized dynamic tool".into());
+                }
+                if require_completion_contract
+                    && message.pointer("/params/completionContract")
+                        != Some(&json!({
+                            "revision": "revision-1",
+                            "criterionIds": ["criterion-1"],
+                        }))
+                {
+                    return Err("thread/start omitted the durable completion contract".into());
                 }
                 state.thread_id = "codex-thread-1".to_owned();
                 state.active_turn_id = None;
@@ -567,8 +862,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }))?;
             }
             "thread/resume" => {
+                if require_external_sandbox
+                    && (message.pointer("/params/sandbox") != Some(&json!("danger-full-access"))
+                        || message.pointer("/params/permissions").is_some())
+                {
+                    return Err("thread/resume omitted the external sandbox boundary".into());
+                }
                 if require_dynamic_tool && !has_task_context_tool(&message) {
                     return Err("thread/resume omitted the authorized dynamic tool".into());
+                }
+                if require_completion_contract
+                    && message.pointer("/params/completionContract")
+                        != Some(&json!({
+                            "revision": "revision-1",
+                            "criterionIds": ["criterion-1"],
+                        }))
+                {
+                    return Err("thread/resume omitted the durable completion contract".into());
                 }
                 let unowned_turn_marker = state_path.with_file_name("resume-unowned-turn");
                 if resume_unowned_turn_when_marked && unowned_turn_marker.exists() {
@@ -613,7 +923,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             "turn/start" => {
+                if require_external_sandbox
+                    && (message.pointer("/params/sandboxPolicy")
+                        != Some(&json!({
+                            "type": "externalSandbox",
+                            "networkAccess": "enabled",
+                        }))
+                        || message.pointer("/params/permissions").is_some())
+                {
+                    return Err("turn/start omitted the external sandbox boundary".into());
+                }
                 turn_start_count += 1;
+                if durable_turn_ids {
+                    state.next_turn = state
+                        .next_turn
+                        .checked_add(1)
+                        .ok_or("fake provider turn sequence exhausted")?;
+                }
                 if reject_second_turn_start && turn_start_count == 2 {
                     send(json!({
                         "method": "warning",
@@ -648,7 +974,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 {
                     "provider-turn-1".to_owned()
                 } else {
-                    format!("provider-turn-{turn_start_count}")
+                    format!(
+                        "provider-turn-{}",
+                        if durable_turn_ids {
+                            state.next_turn
+                        } else {
+                            turn_start_count
+                        }
+                    )
                 };
                 state.active_turn_id = Some(provider_turn_id.clone());
                 save_state(&state_path, &state)?;
@@ -739,6 +1072,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }))?;
                 if fail_after_second_turn_start && turn_start_count == 2 {
                     return Err("configured failure after second turn start".into());
+                } else if fail_turn_immediately {
+                    send(json!({
+                        "method": "turn/completed",
+                        "params": {
+                            "threadId": state.thread_id,
+                            "turn": {
+                                "id": provider_turn_id,
+                                "status": "failed",
+                                "error": {"message": "immediate provider failure"}
+                            }
+                        }
+                    }))?;
+                    state.active_turn_id = None;
+                    save_state(&state_path, &state)?;
                 } else if question_before_failed_turn {
                     send_question(&state)?;
                     send(json!({
@@ -839,6 +1186,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             return Ok(());
                         }
                     }
+                } else if emit_runtime_question {
+                    send_runtime_question(&state)?;
+                } else if emit_opencode_proxy_runtime_question {
+                    send_opencode_proxy_runtime_question(&state)?;
+                } else if emit_runtime_elicitation {
+                    send_runtime_elicitation(&state)?;
+                } else if emit_structured_activity {
+                    send_structured_activity(&state)?;
+                    finish_turn(&state_path, &mut state, "completed")?;
+                } else if emit_split_event_burst {
+                    send_split_event_burst(&state)?;
                 } else if emit_question {
                     send_question(&state)?;
                 } else if !hold_turn {
@@ -862,6 +1220,60 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             "params": {"message": "provider remained live after terminal"}
                         }))?;
                     }
+                    if emit_post_completion_passive_statuses {
+                        for notification in [
+                            json!({
+                                "method": "remoteControl/status/changed",
+                                "params": {"status": "disabled", "environmentId": null}
+                            }),
+                            json!({
+                                "method": "mcpServer/startupStatus/updated",
+                                "params": {"name": "codex_apps", "status": "ready", "error": null}
+                            }),
+                            json!({
+                                "method": "account/rateLimits/updated",
+                                "params": {"rateLimits": {}}
+                            }),
+                            json!({
+                                "method": "rawResponseItem/completed",
+                                "params": {"item": {"id": "raw-tail", "type": "reasoning"}}
+                            }),
+                            json!({
+                                "method": "rawResponse/completed",
+                                "params": {"response": {"id": "response-tail"}}
+                            }),
+                            json!({
+                                "method": "thread/goal/updated",
+                                "params": {"threadId": state.thread_id, "goal": "finish the turn"}
+                            }),
+                            json!({
+                                "method": "thread/goal/cleared",
+                                "params": {"threadId": state.thread_id}
+                            }),
+                        ] {
+                            send(notification)?;
+                        }
+                    }
+                    if emit_post_completion_foreign_turn {
+                        if let Some(gate) = post_completion_notification_gate.as_ref() {
+                            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                            while !gate.is_file() {
+                                if std::time::Instant::now() >= deadline {
+                                    return Err(
+                                        "post-completion notification gate timed out".into()
+                                    );
+                                }
+                                thread::sleep(Duration::from_millis(1));
+                            }
+                        }
+                        send(json!({
+                            "method": "turn/started",
+                            "params": {"threadId": state.thread_id, "turn": {"id": "unowned-turn"}}
+                        }))?;
+                        if let Some(gate) = post_completion_notification_gate.as_ref() {
+                            fs::write(gate.with_extension("emitted"), b"emitted")?;
+                        }
+                    }
                     if fail_after_turn_completion {
                         if let Some(delay_ms) = fail_after_turn_completion_delay_ms {
                             thread::sleep(Duration::from_millis(delay_ms));
@@ -881,7 +1293,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            "turn/steer" => send(json!({"id": id, "result": {"accepted": true}}))?,
+            "turn/steer" => {
+                send(json!({"id": id, "result": {"accepted": true}}))?;
+                if linger_after_turn_start {
+                    send(json!({
+                        "method": "item/completed",
+                        "params": {
+                            "threadId": state.thread_id,
+                            "turnId": state.active_turn_id,
+                            "item": {
+                                "id": "steering-acknowledgement-1",
+                                "type": "steering_acknowledgement",
+                                "status": "completed"
+                            }
+                        }
+                    }))?;
+                }
+            }
             "turn/interrupt" => {
                 interrupt_count += 1;
                 if fail_first_interrupt && interrupt_count == 1 {

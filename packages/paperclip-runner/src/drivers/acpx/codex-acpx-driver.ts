@@ -60,6 +60,10 @@ import {
   validateAcpxDriverConfig,
 } from "./driver-profile.js";
 import {
+  resolveQualifiedAcpxProfile,
+  type QualifiedAcpxAgent,
+} from "./qualified-profiles.js";
+import {
   ACPX_TURN_CANCELLATION_SHUTDOWN_BOUND_MS,
   AcpxRuntimeHost,
   type AcpxRetainedCleanupFailure,
@@ -120,6 +124,8 @@ export interface CodexAcpxDynamicToolCall {
 }
 
 export interface CodexAcpxDriverOptions {
+  /** Defaults to Codex for backward compatibility. */
+  agent?: QualifiedAcpxAgent;
   runtimeDirectory: string;
   model: string;
   permissionMode?: NativeAcpxPermissionMode;
@@ -166,7 +172,74 @@ export interface CodexAcpxDriverDependencies {
   }) => Promise<AcpxRecoveryWorkspaceLease>;
 }
 
-/** Codex-only HarnessDriver backed by the admitted ACPX runtime host. */
+export interface ProbeQualifiedAcpxEnvironmentOptions {
+  runtimeDirectory: string;
+  agent: QualifiedAcpxAgent;
+  model: string;
+  environment?: NodeJS.ProcessEnv;
+}
+
+export interface QualifiedAcpxEnvironmentProbe {
+  effectiveModel: string;
+  commandDigest: string;
+}
+
+/**
+ * Admit and cleanly close the same qualified ACPX host used by production
+ * sessions without exposing that host as part of the public package surface.
+ */
+export async function probeQualifiedAcpxEnvironment(
+  options: ProbeQualifiedAcpxEnvironmentOptions,
+): Promise<QualifiedAcpxEnvironmentProbe> {
+  const profile = resolveQualifiedAcpxProfile(options.agent, options.model);
+  const driver = new CodexAcpxDriver({
+    runtimeDirectory: options.runtimeDirectory,
+    agent: options.agent,
+    model: options.model,
+    permissionMode: "deny-all",
+    systemInstructions:
+      "Paperclip Runner environment qualification probe. Do not execute a provider turn.",
+    ...(options.environment === undefined
+      ? {}
+      : { environment: options.environment }),
+    dynamicTools: [],
+    dynamicToolHandler: async () => {
+      throw new Error("environment probe exposes no semantic tools");
+    },
+  });
+  const session = await driver.openSession({
+    runId: "environment-probe",
+    normalizedSessionId: "environment-probe",
+    workingDirectory: options.runtimeDirectory,
+  });
+  try {
+    const snapshot = await session.snapshot();
+    if (snapshot.providerIdentity?.kind !== "acpx") {
+      throw new Error("ACPX environment probe returned no provider identity");
+    }
+    return Object.freeze({
+      effectiveModel: snapshot.providerIdentity.effectiveModel,
+      commandDigest: profile.commandDigest,
+    });
+  } finally {
+    // A successful return is authoritative proof that the driver's bounded
+    // close released the provider, credential lease, semantic bridge, and
+    // verified command. A failed close remains owned by the driver's retained
+    // recovery/quarantine path, so callers must preserve runtimeDirectory.
+    await session.close({ reason: "environment probe complete" });
+  }
+}
+
+function openProductionAcpxHost(
+  options: OpenAcpxRuntimeHostOptions,
+): Promise<AcpxRuntimeHost> {
+  return AcpxRuntimeHost.open(options, {
+    openRuntime: openCodexAcpxRuntime,
+    reportRetainedCleanupFailure: reportRetainedAcpxCleanupFailure,
+  });
+}
+
+/** Qualified HarnessDriver backed by the admitted ACPX runtime host. */
 export class CodexAcpxDriver implements HarnessDriver {
   readonly #options: CodexAcpxDriverOptions;
   readonly #openHost: NonNullable<CodexAcpxDriverDependencies["openHost"]>;
@@ -183,8 +256,14 @@ export class CodexAcpxDriver implements HarnessDriver {
     options: CodexAcpxDriverOptions,
     dependencies: CodexAcpxDriverDependencies = {},
   ) {
+    if (options.agent === "pi") {
+      throw new Error(
+        "Pi ACPX driver is unavailable until descriptor-confined verified launch is implemented",
+      );
+    }
     this.#options = {
       ...options,
+      agent: options.agent ?? "codex",
       ...(options.environment
         ? { environment: { ...options.environment } }
         : {}),
@@ -192,13 +271,7 @@ export class CodexAcpxDriver implements HarnessDriver {
         ? { dynamicTools: structuredClone(options.dynamicTools) }
         : {}),
     };
-    this.#openHost =
-      dependencies.openHost ??
-      ((hostOptions) =>
-        AcpxRuntimeHost.open(hostOptions, {
-          openRuntime: openCodexAcpxRuntime,
-          reportRetainedCleanupFailure: reportRetainedAcpxCleanupFailure,
-        }));
+    this.#openHost = dependencies.openHost ?? openProductionAcpxHost;
     this.#closeSettlementTimeoutMs =
       dependencies.closeSettlementTimeoutMs ?? CLOSE_TURN_SETTLEMENT_TIMEOUT_MS;
     this.#terminalEventReserve = Math.max(
@@ -214,10 +287,9 @@ export class CodexAcpxDriver implements HarnessDriver {
   }
 
   async descriptor(): Promise<HarnessDriverDescriptor> {
-    const descriptor = acpxDriverDescriptor("codex");
+    const descriptor = acpxDriverDescriptor(this.#options.agent ?? "codex");
     return {
       ...descriptor,
-      displayName: "Codex via ACPX",
       runtimeContextCapabilities: {
         instructions: "native",
         skills: "unsupported",
@@ -235,7 +307,10 @@ export class CodexAcpxDriver implements HarnessDriver {
 
   async validateConfig(value: unknown): Promise<HarnessDriverConfigValidation> {
     const validation = validateAcpxDriverConfig(value);
-    if (!validation.ok || validation.config.agent === "codex")
+    if (
+      !validation.ok ||
+      validation.config.agent === (this.#options.agent ?? "codex")
+    )
       return validation;
     return {
       ok: false,
@@ -244,7 +319,7 @@ export class CodexAcpxDriver implements HarnessDriver {
         {
           path: "agent",
           code: "unsupported_agent",
-          message: "The production ACPX driver currently supports Codex only.",
+          message: `This ACPX driver is bound to ${this.#options.agent ?? "codex"}.`,
         },
       ],
     };
@@ -264,9 +339,8 @@ export class CodexAcpxDriver implements HarnessDriver {
     },
   ): Promise<HarnessSessionRecoveryResult> {
     try {
-      await runAbortableDriverAdmission(
-        options.signal,
-        () => this.#retryQuarantinedHostCleanups(),
+      await runAbortableDriverAdmission(options.signal, () =>
+        this.#retryQuarantinedHostCleanups(),
       );
       validateRecoverySnapshot(snapshot);
       const terminalTurnIds = new Set(
@@ -306,10 +380,12 @@ export class CodexAcpxDriver implements HarnessDriver {
       } catch (error) {
         await workspaceLease.close().catch(() => undefined);
         if (recoveredSession) {
-          await recoveredSession.close({
-            reason: "ACPX recovery workspace lease cleanup failed",
-            force: true,
-          }).catch(() => undefined);
+          await recoveredSession
+            .close({
+              reason: "ACPX recovery workspace lease cleanup failed",
+              force: true,
+            })
+            .catch(() => undefined);
         }
         throw error;
       }
@@ -355,7 +431,7 @@ export class CodexAcpxDriver implements HarnessDriver {
         runtimeDirectory: this.#options.runtimeDirectory,
         normalizedSessionId: input.normalizedSessionId,
         workingDirectory: input.workingDirectory,
-        agent: "codex",
+        agent: this.#options.agent ?? "codex",
         model: this.#options.model,
         permissionMode: this.#options.permissionMode ?? "approve-reads",
         systemInstructions: this.#options.systemInstructions,
@@ -383,6 +459,7 @@ export class CodexAcpxDriver implements HarnessDriver {
       input.signal?.throwIfAborted();
       session = new CodexAcpxSession({
         host,
+        agent: this.#options.agent ?? "codex",
         input,
         dynamicToolHandler: this.#options.dynamicToolHandler,
         now: this.#options.now ?? (() => new Date()),
@@ -625,6 +702,7 @@ export class CodexAcpxDriver implements HarnessDriver {
 
 class CodexAcpxSession implements HarnessSession {
   readonly #host: CodexAcpxHost;
+  readonly #agent: QualifiedAcpxAgent;
   readonly #input: OpenHarnessSessionInput;
   readonly #dynamicToolHandler?: CodexAcpxDriverOptions["dynamicToolHandler"];
   readonly #now: () => Date;
@@ -680,6 +758,7 @@ class CodexAcpxSession implements HarnessSession {
 
   constructor(input: {
     host: CodexAcpxHost;
+    agent: QualifiedAcpxAgent;
     input: OpenHarnessSessionInput;
     dynamicToolHandler?: CodexAcpxDriverOptions["dynamicToolHandler"];
     now: () => Date;
@@ -695,6 +774,7 @@ class CodexAcpxSession implements HarnessSession {
       throw new Error("Codex ACPX host returned a different session identity");
     }
     this.#host = input.host;
+    this.#agent = input.agent;
     this.#input = structuredClone(input.input);
     this.#dynamicToolHandler = input.dynamicToolHandler;
     this.#now = input.now;
@@ -916,9 +996,11 @@ class CodexAcpxSession implements HarnessSession {
     pending.cleanup();
     pending.settle({ action: "cancel" });
     const cleanup = Promise.resolve()
-      .then(() => this.#host.interruptActiveTurn(
-        "Paperclip parked the ACPX input on a durable wait.",
-      ))
+      .then(() =>
+        this.#host.interruptActiveTurn(
+          "Paperclip parked the ACPX input on a durable wait.",
+        ),
+      )
       .catch((error: unknown) => {
         if (
           this.#activeTurnId === input.turnId &&
@@ -973,10 +1055,12 @@ class CodexAcpxSession implements HarnessSession {
         this.#semanticFingerprint === null ||
         (claimsLaterTurn && !repeatsPendingTransfer)
       ) {
-        if (!this.#emit("run.result.proposed", validation.result, {
-          turnId,
-          itemId: call.callId,
-        })) {
+        if (
+          !this.#emit("run.result.proposed", validation.result, {
+            turnId,
+            itemId: call.callId,
+          })
+        ) {
           throw new HarnessCapabilityUnavailableError(
             "run.result.proposed",
             "the event consumer must drain provider events before a semantic result can be accepted",
@@ -1070,6 +1154,8 @@ class CodexAcpxSession implements HarnessSession {
         requestedModel: identity.requestedModel,
         effectiveModel: identity.effectiveModel,
         permissionMode: identity.permissionMode,
+        providerLifetimeFenceCandidates:
+          identity.providerLifetimeFenceCandidates,
       },
       semanticResult:
         this.#semanticResult &&
@@ -1255,7 +1341,7 @@ class CodexAcpxSession implements HarnessSession {
           this.#emit(
             "item.completed",
             { kind: "agentMessage", channel: "final", text: finalText },
-            { turnId, itemId: `${turnId}:final-answer` },
+            { turnId, itemId: `${turnId}:assistant-message` },
           );
         }
         this.#publishTerminal(
@@ -1420,7 +1506,9 @@ class CodexAcpxSession implements HarnessSession {
     const fallbackItemId = `${turnId}:acp:${index}`;
     if (event.type === "text_delta") {
       const output = boundedText(event.text, 64 * 1024);
-      if (event.stream !== "thought" && event.tag !== "agent_thought_chunk") {
+      const isReasoning =
+        event.stream === "thought" || event.tag === "agent_thought_chunk";
+      if (!isReasoning) {
         this.#assistantText = boundedText(
           `${this.#assistantText}${output}`,
           256 * 1024,
@@ -1429,13 +1517,16 @@ class CodexAcpxSession implements HarnessSession {
       this.#emit(
         "item.delta",
         {
-          kind:
-            event.stream === "thought" || event.tag === "agent_thought_chunk"
-              ? "thinking"
-              : "agent_message",
+          kind: isReasoning ? "reasoning" : "agentMessage",
+          channel: isReasoning ? "summary" : "unknown",
           text: output,
         },
-        { turnId, itemId: fallbackItemId },
+        {
+          turnId,
+          itemId: isReasoning
+            ? `${turnId}:reasoning`
+            : `${turnId}:assistant-message`,
+        },
       );
     }
     if (event.type === "status" && event.tag === "usage_update") {
@@ -1545,7 +1636,7 @@ class CodexAcpxSession implements HarnessSession {
       input: structuredClone(normalized.questionSet),
       origin: {
         adapter: "acpx-runtime",
-        provider: "codex",
+        provider: this.#agent,
         method: "elicitation/create",
       },
     };
@@ -1782,7 +1873,10 @@ function validateRecoverySnapshot(snapshot: PersistedHarnessSession): void {
     (identity.permissionMode !== undefined &&
       !["approve-all", "approve-reads", "deny-all"].includes(
         identity.permissionMode,
-      ))
+      )) ||
+    !validProviderLifetimeFenceCandidates(
+      identity.providerLifetimeFenceCandidates,
+    )
   ) {
     throw new Error("persisted Codex ACPX session identity is inconsistent");
   }
@@ -1877,10 +1971,7 @@ function validateRecoverySnapshot(snapshot: PersistedHarnessSession): void {
         "persisted Codex ACPX semantic result is not the latest terminal settlement",
       );
     }
-    if (
-      snapshot.activeTurnId !== undefined &&
-      snapshot.activeTurnId !== null
-    ) {
+    if (snapshot.activeTurnId !== undefined && snapshot.activeTurnId !== null) {
       const activeTerminal = terminalTurns.find(
         (terminal) => terminal.turnId === snapshot.activeTurnId,
       );
@@ -1904,9 +1995,9 @@ function validateRecoverySnapshot(snapshot: PersistedHarnessSession): void {
       (terminal) => terminal.turnId === settlementTurnId,
     );
     if (
-      settlementTurnId !== latestTerminalTurnId
-      || !settlement
-      || !isCompletedTerminal(settlement.fingerprint)
+      settlementTurnId !== latestTerminalTurnId ||
+      !settlement ||
+      !isCompletedTerminal(settlement.fingerprint)
     ) {
       throw new Error(
         "persisted Codex ACPX resultless recovery requires a completed terminal turn",
@@ -1915,13 +2006,28 @@ function validateRecoverySnapshot(snapshot: PersistedHarnessSession): void {
   }
 }
 
+function validProviderLifetimeFenceCandidates(
+  value: unknown,
+): value is readonly [number, number, number] {
+  return (
+    Array.isArray(value) &&
+    value.length === 3 &&
+    value.every(
+      (port) => Number.isSafeInteger(port) && port >= 49_152 && port <= 65_535,
+    ) &&
+    new Set(value).size === 3
+  );
+}
+
 function isCompletedTerminal(terminalFingerprint: string): boolean {
   try {
     const value: unknown = JSON.parse(terminalFingerprint);
-    return typeof value === "object"
-      && value !== null
-      && !Array.isArray(value)
-      && (value as Record<string, unknown>).status === "completed";
+    return (
+      typeof value === "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      (value as Record<string, unknown>).status === "completed"
+    );
   } catch {
     return false;
   }
