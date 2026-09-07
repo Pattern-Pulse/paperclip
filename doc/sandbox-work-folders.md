@@ -68,7 +68,10 @@ including a lease originally configured as ephemeral.
 Deletion moves files to recoverable trash. Restore rejects path collisions.
 Explicit purge and permanent owner deletion schedule object cleanup through a
 durable deletion journal. Overwritten scoped-file content is not versioned.
-Repository checkpoint objects remain retained while their task binding exists.
+The current complete repository checkpoint remains retained while its task
+binding exists. Superseded manifests and unused blobs enter a 24-hour deletion
+queue; shared blobs in the current checkpoint stay protected. A save that takes
+more than one hour fails visibly and must retry before its old references expire.
 The scheduler retries object cleanup every three minutes; disabled heartbeat
 scheduling also disables this cleanup sweep.
 

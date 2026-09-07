@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
 import { COMPANY_IMPORT_TRANSFERS_ROUTE_PATH } from "@paperclipai/shared/company-import-transfer";
+import { WORK_FOLDER_ROUTE_PATH } from "@paperclipai/shared";
 import { errorHandler } from "../middleware/index.js";
 import { buildOpenApiSpec, openApiRoutes } from "../routes/openapi.js";
 
@@ -63,6 +64,7 @@ const apiPrefixes: Record<string, string> = {
   "tool-access.ts": "/api",
   "tool-gateway.ts": "/api",
   "user-profiles.ts": "/api",
+  "work-folders.ts": "/api",
 };
 
 const ROUTE_LITERAL_PATTERN = /router\.(get|post|put|patch|delete)\(\s*["'`]([^"'`]+)["'`]/g;
@@ -94,6 +96,7 @@ function createApp() {
 // literals; substitute the constants' values before normalizing.
 const routePathConstantSubstitutions: Record<string, string> = {
   "${COMPANY_IMPORT_TRANSFERS_ROUTE_PATH}": COMPANY_IMPORT_TRANSFERS_ROUTE_PATH,
+  "${base}": WORK_FOLDER_ROUTE_PATH,
 };
 
 function normalizeExpressPath(routePath: string) {
@@ -152,6 +155,9 @@ function loadActualRoutes() {
 
     if (file === "companies.ts" && source.includes("router.post(COMPANY_IMPORT_ROUTE_PATH")) {
       routes.add("POST /api/companies/import");
+    }
+    if (file === "work-folders.ts" && source.includes("router.get(base,")) {
+      routes.add(`GET ${normalizeExpressPath(`/api${WORK_FOLDER_ROUTE_PATH}`)}`);
     }
     if (file === "companies.ts" && source.includes("router.post(COMPANY_IMPORT_TRANSFERS_ROUTE_PATH")) {
       routes.add(`POST /api/companies${COMPANY_IMPORT_TRANSFERS_ROUTE_PATH}`);

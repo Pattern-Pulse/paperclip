@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Readable, Transform } from "node:stream";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { taskRepositoryBindings, workFolderObjects, type Db } from "@paperclipai/db";
 import { validateWorkFilePath } from "@paperclipai/shared";
 import { z } from "zod";
@@ -21,6 +21,14 @@ function signature(entries: WorkTreeEntry[]) {
 export function workFolderRepositoryService(db: Db, storage: StorageProvider, transport: WorkFolderTransport) {
   const knownByBinding = new Map<string, Set<string>>();
   async function checkpoint(binding: Binding, root: string) {
+    // Another sandbox can have published since this coordinator loaded the
+    // binding. Cache only the current complete checkpoint's protected objects.
+    const [current] = await db.select().from(taskRepositoryBindings).where(and(
+      eq(taskRepositoryBindings.id, binding.id), eq(taskRepositoryBindings.companyId, binding.companyId)));
+    if (!current) throw new Error("Repository owner was deleted during checkpoint");
+    if (current.checkpointKey !== binding.checkpointKey) knownByBinding.delete(binding.id);
+    Object.assign(binding, current);
+    const startedAt = Date.now();
     const entries = await transport.scan(root, true);
     const digest = signature(entries);
     if (binding.checkpointSha256 === digest) return;
@@ -49,12 +57,25 @@ export function workFolderRepositoryService(db: Db, storage: StorageProvider, tr
     const body = Buffer.from(JSON.stringify({ version: 1, bindingId: binding.id, files }));
     await registerWorkFolderObject(db, storage, { objectKey: checkpointKey, companyId: binding.companyId, repositoryBindingId: binding.id });
     await storage.putObject({ objectKey: checkpointKey, body, contentType: "application/json", contentLength: body.length });
+    // Retired objects have a 24-hour grace period. A checkpoint must finish
+    // within that window even when a competing run advances the pointer.
+    if (Date.now() - startedAt > 60 * 60 * 1000) throw new Error("Repository checkpoint exceeded the one-hour save limit; retry required");
     await db.transaction(async (tx) => {
-      // Retain every object in this complete binding before making the pointer
-      // visible. Unpublished uploads keep their expiry for later collection.
-      const published = [checkpointKey, ...new Set(files.flatMap((file) => file.objectKey && !known.has(file.objectKey) ? [file.objectKey] : []))];
+      const [owner] = await tx.select({ id: taskRepositoryBindings.id }).from(taskRepositoryBindings)
+        .where(and(eq(taskRepositoryBindings.id, binding.id), eq(taskRepositoryBindings.companyId, binding.companyId))).for("update");
+      if (!owner) throw new Error("Repository owner was deleted during checkpoint");
+      // Retire superseded manifests and blobs in the same transaction that
+      // protects ALL current objects and advances the complete-checkpoint pointer.
+      // The grace period also lets an already-started restore finish safely.
+      await tx.update(workFolderObjects).set({ deleteAfter: new Date(Date.now() + 24 * 60 * 60 * 1000) })
+        .where(and(eq(workFolderObjects.repositoryBindingId, binding.id), eq(workFolderObjects.companyId, binding.companyId), isNull(workFolderObjects.deleteAfter)));
+      const published = [checkpointKey, ...new Set(files.flatMap((file) => file.objectKey ? [file.objectKey] : []))];
       for (let offset = 0; offset < published.length; offset += 1000) {
-        await tx.update(workFolderObjects).set({ deleteAfter: null }).where(inArray(workFolderObjects.objectKey, published.slice(offset, offset + 1000)));
+        const batch = published.slice(offset, offset + 1000);
+        const protectedObjects = await tx.update(workFolderObjects).set({ deleteAfter: null })
+          .where(and(eq(workFolderObjects.repositoryBindingId, binding.id), inArray(workFolderObjects.objectKey, batch)))
+          .returning({ key: workFolderObjects.objectKey });
+        if (protectedObjects.length !== batch.length) throw new Error("Repository objects expired during checkpoint; retry required");
       }
       const updated = await tx.update(taskRepositoryBindings).set({ checkpointKey, checkpointSha256: digest, checkpointAt: new Date() })
         .where(and(eq(taskRepositoryBindings.id, binding.id), eq(taskRepositoryBindings.companyId, binding.companyId))).returning({ id: taskRepositoryBindings.id });

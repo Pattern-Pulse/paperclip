@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { type Db, workFolderRuns, heartbeatRuns } from "@paperclipai/db";
 import { and, desc, eq, sql } from "drizzle-orm";
-import { WORK_FOLDER_SCOPES } from "@paperclipai/shared";
+import { WORK_FOLDER_SCOPES, WORK_FOLDER_ROUTE_PATH } from "@paperclipai/shared";
 import { loadConfig } from "../config.js";
 import { createStorageProviderFromConfig } from "../storage/provider-registry.js";
 import type { StorageProvider } from "../storage/types.js";
@@ -24,7 +24,7 @@ export function workFolderRoutes(db: Db, provider?: StorageProvider) {
   const router = Router();
   // Resolve lazily: route registration and tests need not initialize cloud credentials.
   const service = () => workFolderService(db, provider ?? createStorageProviderFromConfig(loadConfig()));
-  const base = "/companies/:companyId/work-folders/:scope/:ownerId";
+  const base = WORK_FOLDER_ROUTE_PATH;
   router.use(base, async (req, _res, next) => {
     const owner = ownerSchema.parse(req.params);
     await assertWorkFolderAccess(db, req.actor, owner, !["GET", "HEAD"].includes(req.method));

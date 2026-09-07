@@ -6,11 +6,12 @@ import { eq } from "drizzle-orm";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { agents, assets, companyMemberships, issueAttachments, companies, createDb, heartbeatRuns, issues, environments, environmentLeases, projects, projectWorkspaces, taskRepositoryBindings, startEmbeddedPostgresTestDatabase, type Db } from "@paperclipai/db";
+import { agents, assets, companyMemberships, issueAttachments, companies, createDb, heartbeatRuns, issues, environments, environmentLeases, projects, projectWorkspaces, taskRepositoryBindings, workFolderObjects, startEmbeddedPostgresTestDatabase, type Db } from "@paperclipai/db";
 import { createLocalDiskStorageProvider } from "../storage/local-disk-provider.js";
 import { prepareSandboxWorkFolders } from "../services/sandbox-work-folders.js";
 import { retainUnsavedWorkFolderLease, workFolderSandboxKey } from "../services/work-folder-retention.js";
 import { workFolderService } from "../services/work-folders.js";
+import { collectWorkFolderGarbage } from "../services/work-folder-garbage.js";
 import { localTestWorkFolderRunner } from "./helpers/work-folder-runner.js";
 const exec = promisify(execFile);
 
@@ -45,13 +46,16 @@ describe("shared sandbox work-folder lifecycle", () => {
     for (const run of active) await run.stop().catch(() => {});
     await database?.cleanup(); if (root) await fs.rm(root, { recursive: true, force: true });
   });
-  async function prepare(home: string, leaseId: string, physicalId = leaseId, responsibleUserId: string | null = null) {
+  async function prepare(home: string, leaseId: string, physicalId = leaseId, responsibleUserId: string | null = null,
+    options: { taskId?: string; branchName?: string } = {}) {
     await fs.mkdir(home, { recursive: true });
     const runId = randomUUID();
     await db.insert(heartbeatRuns).values({ id: runId, companyId, agentId, responsibleUserId, status: "running" });
     const lease = { id: leaseId, companyId, environmentId, provider: "test", providerLeaseId: physicalId };
     await db.insert(environmentLeases).values({ ...lease, heartbeatRunId: runId }).onConflictDoUpdate({ target: environmentLeases.id, set: { heartbeatRunId: runId } });
-    const run = await prepareSandboxWorkFolders({ db, companyId, agentId, projectId, taskId, runId,
+    const [primary] = await db.select().from(projectWorkspaces).where(eq(projectWorkspaces.projectId, projectId));
+    const run = await prepareSandboxWorkFolders({ db, companyId, agentId, projectId, taskId: options.taskId ?? taskId, runId,
+      primaryWorkspaceId: primary!.id, primaryBranchName: options.branchName,
       responsibleUserId, storage, sandboxKey: workFolderSandboxKey(lease), target: { kind: "remote", transport: "sandbox", leaseId, remoteCwd: home,
         runner: { execute: (input) => localTestWorkFolderRunner.execute({ ...input, env: { ...input.env, HOME: home } }) } } });
     active.push(run); return run;
@@ -197,5 +201,45 @@ describe("shared sandbox work-folder lifecycle", () => {
       for await (const chunk of original.stream) chunks.push(Buffer.from(chunk));
       expect(Buffer.concat(chunks)).toEqual(content);
     }
+  }, 120_000);
+
+  it("gives another task independent checkouts and preserves its task branch on warm starts", async () => {
+    const secondTaskId = randomUUID();
+    await db.insert(issues).values({ id: secondTaskId, companyId, projectId, title: "Independent task", assigneeAgentId: agentId });
+    const lease = randomUUID();
+    const home = path.join(root, "independent-task");
+    const run = await prepare(home, lease, lease, null, { taskId: secondTaskId, branchName: "acceptance/second-task" });
+    expect(run.manifest.repositories).toHaveLength(2);
+    expect((await exec("git", ["-C", run.primaryRepo, "branch", "--show-current"])).stdout.trim()).toBe("acceptance/second-task");
+    expect(await fs.readFile(path.join(run.primaryRepo, "tracked"), "utf8")).toBe("initial\n");
+    await fs.writeFile(path.join(run.primaryRepo, "tracked"), "second task edit");
+    await run.stop(); active.splice(active.indexOf(run), 1);
+    const warm = await prepare(home, randomUUID(), lease, null, { taskId: secondTaskId, branchName: "must-not-reset" });
+    expect((await exec("git", ["-C", warm.primaryRepo, "branch", "--show-current"])).stdout.trim()).toBe("acceptance/second-task");
+    expect(await fs.readFile(path.join(warm.primaryRepo, "tracked"), "utf8")).toBe("second task edit");
+    await warm.stop(); active.splice(active.indexOf(warm), 1);
+  }, 120_000);
+
+  it("collects superseded repository objects while retaining the complete current checkpoint", async () => {
+    const run = await prepare(path.join(root, "checkpoint-garbage"), randomUUID());
+    const filename = path.join(run.primaryRepo, "garbage-fixture");
+    await fs.writeFile(filename, "old unique checkpoint content");
+    await run.flush();
+    const bindingId = run.manifest.repositories.find((binding) => binding.primary)!.bindingId;
+    const [before] = await db.select().from(taskRepositoryBindings).where(eq(taskRepositoryBindings.id, bindingId));
+    const oldBlob = `${companyId}/task-repositories/${bindingId}/blobs/${createHash("sha256").update("old unique checkpoint content").digest("hex")}`;
+    await fs.writeFile(filename, "current checkpoint content");
+    await run.stop(); active.splice(active.indexOf(run), 1);
+    const [after] = await db.select().from(taskRepositoryBindings).where(eq(taskRepositoryBindings.id, bindingId));
+    const [retired] = await db.select().from(workFolderObjects).where(eq(workFolderObjects.objectKey, before!.checkpointKey!));
+    expect(retired!.deleteAfter).not.toBeNull();
+    await collectWorkFolderGarbage(db, storage, new Date(Date.now() + 25 * 60 * 60 * 1000), 1000);
+    expect((await storage.headObject({ objectKey: before!.checkpointKey! })).exists).toBe(false);
+    expect((await storage.headObject({ objectKey: oldBlob })).exists).toBe(false);
+    expect((await storage.headObject({ objectKey: after!.checkpointKey! })).exists).toBe(true);
+    await fs.rm(run.home, { recursive: true });
+    const restored = await prepare(path.join(root, "checkpoint-garbage-restored"), randomUUID());
+    expect(await fs.readFile(path.join(restored.primaryRepo, "garbage-fixture"), "utf8")).toBe("current checkpoint content");
+    await restored.stop(); active.splice(active.indexOf(restored), 1);
   }, 120_000);
 });

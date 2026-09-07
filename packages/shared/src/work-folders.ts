@@ -2,6 +2,7 @@
 export const WORK_FOLDER_SCOPES = ["task", "agent", "user", "project"] as const;
 export type WorkFolderScope = (typeof WORK_FOLDER_SCOPES)[number];
 export const WORK_FOLDER_SYNC_INTERVAL_MS = 180_000;
+export const WORK_FOLDER_ROUTE_PATH = "/companies/:companyId/work-folders/:scope/:ownerId";
 
 export interface WorkFolderOwner {
   companyId: string;
