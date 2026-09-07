@@ -157,12 +157,17 @@ impl AcpxProviderDescriptor {
                 Some("0.153.4"),
                 "sha256:7a923b3829884d3cabcc9659d22cace3f86813e7bfffc90974b10140a45bc400",
             ),
-            "pi" => return Err(DurableRunnerError::invalid(
-                "ACPX agent pi is not executable through the verified runnerd provider boundary",
-            )),
+            "pi" => (
+                "openrouter/deepseek/deepseek-v4-flash-0731",
+                "pi-acp",
+                "0.0.33",
+                Some("@earendil-works/pi-coding-agent"),
+                Some("0.84.2"),
+                "sha256:24ff73fda6e3c76ddce2d359a79f5c4b8f292eb290e4d2ab85aac94676b2c2dc",
+            ),
             _ => {
                 return Err(DurableRunnerError::invalid(
-                    "ACPX agent must be a qualified claude or codex profile",
+                    "ACPX agent must be a qualified claude, codex, or pi profile",
                 ))
             }
         };
@@ -1604,6 +1609,15 @@ mod tests {
                     json!("0.3.263"),
                     "sha256:9d73d1f0f121fb96cc8badb28c22d5bff02d8582eb2e40360a81c189e1b9422a",
                 )
+            } else if agent == "pi" {
+                (
+                    "openrouter/deepseek/deepseek-v4-flash-0731",
+                    "pi-acp",
+                    "0.0.33",
+                    json!("@earendil-works/pi-coding-agent"),
+                    json!("0.84.2"),
+                    "sha256:24ff73fda6e3c76ddce2d359a79f5c4b8f292eb290e4d2ab85aac94676b2c2dc",
+                )
             } else {
                 (
                     "gpt-5.6-sol",
@@ -1641,8 +1655,8 @@ mod tests {
     }
 
     #[test]
-    fn admits_only_exact_qualified_claude_and_codex_descriptors() {
-        for agent in ["claude", "codex"] {
+    fn admits_only_exact_qualified_claude_codex_and_pi_descriptors() {
+        for agent in ["claude", "codex", "pi"] {
             let descriptor: AcpxProviderDescriptor =
                 serde_json::from_value(descriptor(agent)).unwrap();
             descriptor.validate(&context()).unwrap();
@@ -1683,7 +1697,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_pi_before_process_launch() {
+    fn rejects_pi_with_codex_artifacts_before_process_launch() {
         let mut pi = descriptor("codex");
         pi["agent"] = json!("pi");
         let pi: AcpxProviderDescriptor = serde_json::from_value(pi).unwrap();

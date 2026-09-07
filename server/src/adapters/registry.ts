@@ -488,7 +488,7 @@ const paperclipRunnerAdapter: ServerAdapterModule = {
         )
       : buildNpmRuntimeCommandSpec(config, "codex", "@openai/codex@0.153.4"),
   agentConfigurationDoc:
-    "# Paperclip Runner\n\nAdapter: paperclip_runner\n\nRuns Codex, OpenCode, Claude Managed, AWS AgentCore, or a qualified Claude/Codex ACP agent through the Rust Paperclip runner and authenticated PRP transport. Pi is not available through the qualified ACPX profile. Managed providers use company-scoped qualified profiles, explicit retention acknowledgement, and spend limits.\n",
+    "# Paperclip Runner\n\nAdapter: paperclip_runner\n\nRuns Codex, OpenCode, Claude Managed, AWS AgentCore, or a qualified Claude/Codex/Pi ACP agent through the Rust Paperclip runner and authenticated PRP transport. Managed providers use company-scoped qualified profiles, explicit retention acknowledgement, and spend limits.\n",
   getConfigSchema: () => ({
     fields: [
       {
@@ -546,8 +546,9 @@ const paperclipRunnerAdapter: ServerAdapterModule = {
         options: [
           { value: "claude", label: "Claude via ACPX" },
           { value: "codex", label: "Codex via ACPX" },
+          { value: "pi", label: "Pi via ACPX" },
         ],
-        hint: "Only the pinned Claude and Codex profiles are qualified; Pi is unavailable.",
+        hint: "Uses the pinned Claude, Codex, or Pi profile.",
         meta: { visibleWhen: { key: "provider", value: "acpx" } },
       },
       {

@@ -17,6 +17,7 @@ export const CLAUDE_MANAGED_BETA_VERSION = "managed-agents-2026-04-01" as const;
 export const QUALIFIED_ACPX_RUNNER_MODELS = {
   claude: "claude-sonnet-5",
   codex: "gpt-5.6-sol",
+  pi: "openrouter/deepseek/deepseek-v4-flash-0731",
 } as const;
 
 export type QualifiedPaperclipRunnerAcpxAgent =
@@ -404,10 +405,10 @@ export function resolvePaperclipRunnerProviderProfile(
   }
 
   const acpxAgent = config.acpxAgent;
-  if (acpxAgent !== "claude" && acpxAgent !== "codex") {
+  if (acpxAgent !== "claude" && acpxAgent !== "codex" && acpxAgent !== "pi") {
     throw new PaperclipRunnerProviderProfileError(
       "paperclip_runner_acpx_agent_unavailable",
-      "Paperclip Runner ACPX requires the qualified Claude or Codex agent profile; Pi is not available.",
+      "Paperclip Runner ACPX requires the qualified Claude, Codex, or Pi agent profile.",
     );
   }
   const qualifiedModel = QUALIFIED_ACPX_RUNNER_MODELS[acpxAgent];

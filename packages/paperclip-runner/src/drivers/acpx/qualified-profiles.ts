@@ -32,9 +32,9 @@ export interface QualifiedAcpxProfile {
 }
 
 /**
- * Digests bind the closed profile declaration (package, version, runtime and
- * model), not a caller-controlled executable. The environment probe separately
- * verifies the resolved package files before a billable prompt is admitted.
+ * Command digests bind the exact installed adapter entrypoint bytes. The closed
+ * profile also pins its package, runtime and model; launch verifies these
+ * artifacts before a billable prompt is admitted.
  */
 export const QUALIFIED_ACPX_PROFILES: Readonly<
   Record<QualifiedAcpxAgent, QualifiedAcpxProfile>
@@ -50,7 +50,7 @@ export const QUALIFIED_ACPX_PROFILES: Readonly<
     agentRuntimePackage: "@earendil-works/pi-coding-agent",
     agentRuntimeVersion: "0.84.2",
     commandDigest:
-      "sha256:8c696f38296d53d0061fa11534570c5ddd951b63532aed30e0f1fcc676dc169f",
+      "sha256:24ff73fda6e3c76ddce2d359a79f5c4b8f292eb290e4d2ab85aac94676b2c2dc",
     qualificationModel: "openrouter/deepseek/deepseek-v4-flash-0731",
     reportedModelId: "openrouter/deepseek/deepseek-v4-flash-0731",
     permissionPolicy: "interactive",

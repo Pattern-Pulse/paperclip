@@ -12,6 +12,19 @@ Credentials are not recorded in Playwright reports. These API checks supplement
 the required browser walkthrough, two real 180-second intervals, and recovery
 scenarios; passing them alone is not staging acceptance.
 
+The staging matrix covers legacy Codex and Claude with both CLI and ACP,
+legacy OpenCode and Pi, and native Codex, OpenCode, and ACPX Claude/Codex/Pi.
+Cursor, Gemini, Grok, and Kimi are excluded from this acceptance campaign by
+explicit user instruction. Other required profiles must not be silently skipped.
+
+Native Pi uses `pi-acp@0.0.33` with the official Linux x64 Pi `0.84.2`
+standalone executable. The image build verifies the archive and executable
+SHA-256, then starts an ACP session through the runner's descriptor-based
+launcher. It does not make a model request. Live staging must still verify the
+qualified OpenRouter model, work folders, saves, and recovery. The same image
+exposes this Pi executable to the legacy adapter. Provider-pack shims resolve
+links before locating their runtime so task-local launch paths remain valid.
+
 Sandbox runs use the operating-system user's home directory. Both legacy
 adapters and the native runner enter the same host-owned lifecycle before
 dispatch. Local execution keeps its existing workspace and home behavior.

@@ -32,10 +32,17 @@ import {
   snapshotDescriptorAncestorIndex,
   snapshotDescriptorResolution,
   verifiedExecutableOpenFlags,
-  verifyQualifiedAcpxInstallation,
+  verifyQualifiedAcpxInstallation as verifyProductionInstallation,
   type VerifiedAcpxProviderLifetime,
 } from "./installation-integrity.js";
 import { stageManagedCodexCredential } from "./codex-credentials.js";
+
+// Synthetic provider commands exercise the generic descriptor/module confinement
+// independently of the production Pi ELF. Real profiles always use production checks.
+const verifyQualifiedAcpxInstallation: typeof verifyProductionInstallation = (profile, resolver) =>
+  verifyProductionInstallation(profile, resolver, profile.agent === "pi" &&
+    profile.commandDigest !== resolveQualifiedAcpxProfile("pi", "openrouter/deepseek/deepseek-v4-flash-0731").commandDigest
+    ? { runtimeExecutable: async () => null, dependencies: [] } : {});
 
 const temporaryDirectories: string[] = [];
 const descriptorCommandPath = "/proc/self/fd/4/server.js";
@@ -67,7 +74,7 @@ describe("ACPX installation integrity", () => {
     ]);
 
     expect(createAcpxPackageJsonResolver(root)("qualified-provider")).toBe(
-      providerPackageJson,
+      await realpath(providerPackageJson),
     );
 
     const nestedDependencyDirectory = join(
@@ -85,7 +92,7 @@ describe("ACPX installation integrity", () => {
       JSON.stringify({
         name: "qualified-dependency",
         version: "1.0.0",
-        exports: "./index.js",
+        exports: { ".": { import: "./index.js" } },
       }),
     );
     await writeFile(join(nestedDependencyDirectory, "index.js"), "export {};");
@@ -94,7 +101,7 @@ describe("ACPX installation integrity", () => {
         "qualified-dependency",
         providerPackageJson,
       ),
-    ).toBe(nestedDependencyPackageJson);
+    ).toBe(await realpath(nestedDependencyPackageJson));
     expect(() =>
       createAcpxPackageJsonResolver("relative/provider-pack"),
     ).toThrow("explicit normalized absolute path");
@@ -129,7 +136,7 @@ describe("ACPX installation integrity", () => {
     );
     expect(
       createAcpxPackageJsonResolver(root, runnerManifest)("pnpm-provider"),
-    ).toBe(join(pnpmProviderDirectory, "package.json"));
+    ).toBe(await realpath(join(pnpmProviderDirectory, "package.json")));
 
     const outsideManifest = join(parent, "outside-package.json");
     await writeFile(outsideManifest, JSON.stringify({ private: true }));
@@ -414,7 +421,7 @@ describe("ACPX installation integrity", () => {
     });
   });
 
-  it("pins Claude ACP direct dependencies outside its package root", async () => {
+  it.each(["exports", "main"])("pins ACP direct dependencies with %s metadata outside its package root", async (entryField) => {
     const fixture = await installationFixture();
     const command = [
       'import { qualifiedValue } from "@anthropic-ai/claude-agent-sdk";',
@@ -469,7 +476,7 @@ describe("ACPX installation integrity", () => {
             name: dependency.name,
             version: dependency.version,
             type: "module",
-            exports: "./index.js",
+            [entryField]: "./index.js",
           }),
         ),
       ),

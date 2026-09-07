@@ -2039,9 +2039,6 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
   readonly #bridgedRuntimeInputs = new Map<string, { durableTurnId: string }>();
 
   constructor(readonly options: CapabilityRunnerdCodexTransportOptions) {
-    if (options.provider === "acpx" && options.acpxAgent === "pi") {
-      throw new Error("The Pi ACPX profile is not available");
-    }
     this.#failureSignal = new Promise<never>((_resolve, reject) => {
       this.#rejectFailureSignal = reject;
     });

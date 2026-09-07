@@ -33,6 +33,7 @@ const defaultOpenCodeRunnerModel = "openrouter/deepseek/deepseek-v4-flash-0731";
 const acpxRunnerModels = {
   claude: "claude-sonnet-5",
   codex: "gpt-5.6-sol",
+  pi: "openrouter/deepseek/deepseek-v4-flash-0731",
 } as const;
 const defaultClaudeManagedModel = "claude-sonnet-5";
 const defaultAwsAgentCoreModel = "global.anthropic.claude-sonnet-4-6";
@@ -119,7 +120,7 @@ export function CodexLocalConfigFields({
         ? values!.adapterSchemaValues?.acpxAgent
         : eff("adapterConfig", "acpxAgent", config.acpxAgent ?? "claude")
       : "claude";
-  const acpxAgent = configuredAcpxAgent === "codex" ? "codex" : "claude";
+  const acpxAgent = configuredAcpxAgent === "pi" ? "pi" : configuredAcpxAgent === "codex" ? "codex" : "claude";
   const runnerLifecycleMode = runnerManaged
     ? isCreate
       ? (values!.paperclipRunnerLifecycleMode ?? "per_turn")
@@ -390,13 +391,13 @@ export function CodexLocalConfigFields({
       {runnerManaged && runnerProvider === "acpx" && (
         <Field
           label="ACP agent"
-          hint="Only the pinned Claude and Codex profiles are qualified; Pi is unavailable."
+          hint="Uses the pinned Claude, Codex, or Pi profile."
         >
           <select
             className={inputClass}
             value={acpxAgent}
             onChange={(event) => {
-              const agent = event.target.value === "codex" ? "codex" : "claude";
+              const agent = event.target.value === "pi" ? "pi" : event.target.value === "codex" ? "codex" : "claude";
               const model = acpxRunnerModels[agent];
               if (isCreate) {
                 set!({
@@ -414,6 +415,7 @@ export function CodexLocalConfigFields({
           >
             <option value="claude">Claude via ACPX</option>
             <option value="codex">Codex via ACPX</option>
+            <option value="pi">Pi via ACPX</option>
           </select>
         </Field>
       )}
