@@ -134,10 +134,13 @@ acceptance. Record real browser operations, two actual 180-second intervals,
 short-run flushes, independent task checkouts, identity/privacy boundaries,
 interrupted saves, and recovery without the original sandbox or app volume.
 
-`Docker` workflow's optional `preview_migrator` input builds a commit-specific
-GitHub prerelease containing DB/shared tarballs and an integrity manifest. It
-does not publish to npm or advance release channels. Cloud resolves
-`preview:<full SHA>`, verifies artifact identity, migration coverage and the
-dependency lockfile, and permits deployment only to explicitly selected pinned
-stacks. Preview artifacts cannot become the fleet default. A failed or existing
-preview release is never silently overwritten.
+Passing acceptance does not authorize a merge or mainline release. Both require
+the user's explicit sign-off.
+
+Staging migrator artifacts must use a staging-only distribution path; do not
+create GitHub releases to transport them. The initial prerelease publication
+job has been removed. Its replacement remains pending, so the existing
+release-backed preview resolver is not an approved deployment path. The
+replacement must preserve commit identity, artifact integrity, migration
+coverage and dependency-lockfile checks, and restrict deployment to explicitly
+selected pinned staging stacks without changing the fleet default.
