@@ -4344,7 +4344,9 @@ async function executePaperclipNativeSessionWithinScope(
           ...input.execution,
           workspace: {
             ...input.execution.workspace,
-            cwd: input.runnerExecutionTarget.remoteCwd,
+            cwd: input.runnerExecutionTarget.transport === "sandbox"
+              ? input.runnerExecutionTarget.workFolderHome ?? input.runnerExecutionTarget.remoteCwd
+              : input.runnerExecutionTarget.remoteCwd,
           },
         }
       : input.execution;
@@ -7613,7 +7615,7 @@ async function createRunnerdBackendWithinSessionClaim(
         // host-home deny rules cannot shadow the assigned workspace.
         HOME: remoteTarget!.transport === "sandbox" && remoteTarget!.workFolderHome ? remoteTarget!.workFolderHome : posix.join(remoteRunnerFilesystemRoot!, "codex-home"),
         CODEX_HOME: remoteTarget!.transport === "sandbox" && remoteTarget!.workFolderHome ? posix.join(remoteTarget!.workFolderHome, ".codex") : posix.join(remoteRunnerFilesystemRoot!, "codex-home"),
-        PAPERCLIP_WORKSPACE_CWD: runnerExecution.workspace.cwd,
+        PAPERCLIP_WORKSPACE_CWD: remoteTarget!.remoteCwd,
         ...(remoteTarget!.transport === "sandbox"
           ? { PAPERCLIP_RUNNER_EXTERNAL_SANDBOX: "1" }
           : {}),

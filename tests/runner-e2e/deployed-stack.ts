@@ -12,6 +12,7 @@ export function isStagingOrigin(value: string) {
 export interface DeployedStack {
   baseURL: string; stackId: string; commit: string; appImage: string; migratorVersion: string; sandboxImage: string;
   companyId: string; taskId: string; agentId: string; projectId: string; userId: string;
+  excludedAdapters?: Array<{ adapterType: string; reason: string }>;
   profiles: Array<{ id: string; adapterType: string; engine: string; model: string; qualification: string; agentId: string }>;
 }
 
@@ -28,6 +29,12 @@ export function loadDeployedStack(): DeployedStack {
   assert(/@sha256:[a-f0-9]{64}$/.test(manifest.sandboxImage), "Expected immutable sandbox image");
   const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
   for (const key of ["companyId", "taskId", "agentId", "projectId"] as const) assert(uuid.test(manifest[key]), `Invalid ${key}`);
+  if (manifest.excludedAdapters !== undefined) {
+    assert(Array.isArray(manifest.excludedAdapters), "Invalid adapter exclusions");
+    for (const exclusion of manifest.excludedAdapters) {
+      assert(typeof exclusion.adapterType === "string" && typeof exclusion.reason === "string" && exclusion.reason.trim().length > 0, "Exclusions require an explicit reason");
+    }
+  }
   assert(Array.isArray(manifest.profiles) && manifest.profiles.length >= 7, "The seven baseline profiles are required");
   for (const profile of manifest.profiles) {
     for (const key of ["id", "adapterType", "engine", "model", "qualification", "agentId"] as const) {

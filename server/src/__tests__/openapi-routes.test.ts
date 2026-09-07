@@ -405,3 +405,16 @@ describe("openapi routes", () => {
     expect(codes).toEqual(["200", "401", "403", "404"]);
   });
 });
+
+it("declares work-folder retry and executable headers for generated clients", () => {
+  const spec = buildOpenApiSpec();
+  const root = "/api/companies/{companyId}/work-folders/{scope}/{ownerId}";
+  expect(spec.paths[`${root}/content`].put.parameters).toEqual(expect.arrayContaining([
+    expect.objectContaining({ name: "Idempotency-Key", in: "header", required: false }),
+    expect.objectContaining({ name: "X-File-Executable", in: "header", schema: { type: "string", enum: ["true", "false"] } }),
+    expect.objectContaining({ name: "X-File-Content-Type", in: "header" }),
+  ]));
+  expect(spec.paths[`${root}/operations`].post.parameters).toEqual(expect.arrayContaining([
+    expect.objectContaining({ name: "Idempotency-Key", in: "header" }),
+  ]));
+});

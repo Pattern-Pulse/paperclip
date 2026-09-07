@@ -18,7 +18,8 @@ test("deployed candidate and complete supported adapter inventory", async ({}, i
   expect(capabilities.sandboxProviders.daytona?.supportsRunExecution).toBe(true);
   const adapters = await api.json<Array<{ type: string; disabled: boolean; capabilities: { supportsAcp: boolean } }>>("/api/adapters");
   const required: string[] = [];
-  for (const adapter of adapters.filter((entry) => !entry.disabled)) {
+  const excluded = new Set(stack.excludedAdapters?.map((entry) => entry.adapterType));
+  for (const adapter of adapters.filter((entry) => !entry.disabled && !excluded.has(entry.type))) {
     if (capabilities.adapters.find((entry) => entry.adapterType === adapter.type)?.drivers.sandbox !== "supported") continue;
     if (adapter.type === "paperclip_runner") {
       required.push("paperclip_runner:codex", "paperclip_runner:opencode",

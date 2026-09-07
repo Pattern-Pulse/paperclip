@@ -255,6 +255,7 @@ type OpenApiPathRegistration = {
   request?: {
     params?: z.ZodTypeAny;
     query?: z.ZodTypeAny;
+    headers?: z.ZodTypeAny;
     body?: {
       content: Record<string, { schema: unknown }>;
       required?: boolean;
@@ -487,7 +488,7 @@ function normalizeResponses(responses: Record<string, OpenApiResponse> = {}) {
   );
 }
 
-function parametersFromSchema(schema: z.ZodTypeAny, location: "path" | "query") {
+function parametersFromSchema(schema: z.ZodTypeAny, location: "path" | "query" | "header") {
   const objectSchema = unwrapSchema(schema);
   if (zodTypeName(objectSchema) !== "object") return [];
   const shape = zodDef(objectSchema).shape as Record<string, z.ZodTypeAny>;
@@ -526,6 +527,12 @@ class OpenAPIRegistry {
         normalizedOperation.parameters = [
           ...((normalizedOperation.parameters as unknown[]) ?? []),
           ...parametersFromSchema(request.query, "query"),
+        ];
+      }
+      if (request?.headers) {
+        normalizedOperation.parameters = [
+          ...((normalizedOperation.parameters as unknown[]) ?? []),
+          ...parametersFromSchema(request.headers, "header"),
         ];
       }
       if (request?.body) {
@@ -5277,12 +5284,15 @@ registry.registerPath({ method: "get", path: `${workFolderPath}/content`, tags: 
 });
 registry.registerPath({ method: "put", path: `${workFolderPath}/content`, tags: ["work-folders"], summary: "Upload or replace a scoped file",
   description: "Send raw bytes as application/octet-stream, including an empty body for an empty file. Idempotency-Key identifies a retry. X-File-Executable: true preserves executable permission. X-File-Content-Type specifies the stored media type.",
-  request: { params: workFolderParams, query: z.object({ path: z.string() }), body: { required: true, content: { "application/octet-stream": { schema: { type: "string", format: "binary" } } } } },
+  request: { params: workFolderParams, query: z.object({ path: z.string() }), headers: z.object({
+    "Idempotency-Key": z.string().optional(), "X-File-Executable": z.enum(["true", "false"]).optional(),
+    "X-File-Content-Type": z.string().optional(),
+  }), body: { required: true, content: { "application/octet-stream": { schema: { type: "string", format: "binary" } } } } },
   responses: { ...workFolderErrors, 200: r.ok() },
 });
 registry.registerPath({ method: "post", path: `${workFolderPath}/operations`, tags: ["work-folders"], summary: "Create a directory, delete, restore, or permanently purge files",
   description: "Deletion retains a recoverable copy. Restore rejects occupied paths. Purge removes the deleted copy permanently. Idempotency-Key identifies retries.",
-  request: { params: workFolderParams, body: jsonBody(z.discriminatedUnion("action", [
+  request: { params: workFolderParams, headers: z.object({ "Idempotency-Key": z.string().optional() }), body: jsonBody(z.discriminatedUnion("action", [
     z.object({ action: z.literal("mkdir"), path: z.string() }), z.object({ action: z.literal("delete"), path: z.string() }),
     z.object({ action: z.literal("restore"), fileId: z.uuid() }), z.object({ action: z.literal("purge"), fileId: z.uuid() }),
   ])) }, responses: { ...workFolderErrors, 200: r.ok(z.object({ applied: z.boolean() })) },

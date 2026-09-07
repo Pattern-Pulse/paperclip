@@ -7,21 +7,23 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { materializePublishManifest, prepareBundledPackage } from "./prepare-bundled-package.mjs";
 
-export function previewIdentity(sha, date, repository = "paperclipai/paperclip") {
+export function previewIdentity(sha, date, artifactBaseUrl) {
   if (!/^[a-f0-9]{40}$/.test(sha) || Number.isNaN(date.getTime())) throw new Error("Invalid preview commit");
+  const base = new URL(artifactBaseUrl);
+  if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash) throw new Error("Invalid staging artifact base URL");
   const day = `${date.getUTCMonth() + 1}${String(date.getUTCDate()).padStart(2, "0")}`;
   const second = date.getUTCHours() * 3600 + date.getUTCMinutes() * 60 + date.getUTCSeconds() + 1;
   return { tag: `preview/${sha}`, version: `${date.getUTCFullYear()}.${day}.${second}-preview.sha${sha}`,
-    baseUrl: `https://github.com/${repository}/releases/download/${encodeURIComponent(`preview/${sha}`)}` };
+    baseUrl: `${base.href.replace(/\/$/, "")}/${sha}` };
 }
 
-export function buildPreviewMigrator(outputDirectory) {
+export function buildPreviewMigrator(outputDirectory, artifactBaseUrl) {
   const repo = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
   const git = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
   const sha = git("rev-parse", "HEAD");
   if (process.env.GITHUB_SHA && process.env.GITHUB_SHA !== sha) throw new Error("Preview checkout differs from the workflow commit");
   git("diff", "--quiet", "HEAD");
-  const identity = previewIdentity(sha, new Date(git("show", "-s", "--format=%cI", "HEAD")));
+  const identity = previewIdentity(sha, new Date(git("show", "-s", "--format=%cI", "HEAD")), artifactBaseUrl);
   execFileSync("pnpm", ["--filter", "@paperclipai/db...", "build"], { cwd: repo, stdio: "inherit" });
   const output = path.resolve(outputDirectory);
   mkdirSync(output, { recursive: true });
@@ -58,6 +60,6 @@ export function buildPreviewMigrator(outputDirectory) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  if (!process.argv[2]) throw new Error("Usage: build-preview-migrator.mjs <new output directory>");
-  console.log(JSON.stringify(buildPreviewMigrator(process.argv[2])));
+  if (!process.argv[2] || !process.argv[3]) throw new Error("Usage: build-preview-migrator.mjs <new output directory> <staging artifact base URL>");
+  console.log(JSON.stringify(buildPreviewMigrator(process.argv[2], process.argv[3])));
 }

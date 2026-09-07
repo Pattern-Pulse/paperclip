@@ -13,6 +13,11 @@ on:
   # the new tag ref instead. The tag mapping below keys off github.ref either
   # way.
   workflow_dispatch:
+    inputs:
+      staging_artifact_base_url:
+        description: Optional HTTPS object-storage/CDN prefix for staging migrator artifacts (build only; no releases)
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -26,6 +31,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  staging-migrator:
+    if: github.event_name == 'workflow_dispatch' && inputs.staging_artifact_base_url != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Require a non-default branch
+        env:
+          REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          [[ "$REF" == refs/heads/* && "$REF" != "refs/heads/$DEFAULT_BRANCH" ]]
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.4
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: pnpm install --frozen-lockfile
+      - name: Build matching migrator artifacts
+        env:
+          ARTIFACT_BASE_URL: ${{ inputs.staging_artifact_base_url }}
+        run: node scripts/build-preview-migrator.mjs "$RUNNER_TEMP/staging-migrator" "$ARTIFACT_BASE_URL"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: staging-migrator-${{ github.sha }}
+          path: ${{ runner.temp }}/staging-migrator/
+          if-no-files-found: error
+          retention-days: 30
+
   build-and-push:
     runs-on: ubuntu-latest
     timeout-minutes: 60

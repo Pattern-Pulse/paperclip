@@ -137,10 +137,17 @@ interrupted saves, and recovery without the original sandbox or app volume.
 Passing acceptance does not authorize a merge or mainline release. Both require
 the user's explicit sign-off.
 
-Staging migrator artifacts must use a staging-only distribution path; do not
-create GitHub releases to transport them. The initial prerelease publication
-job has been removed. Its replacement remains pending, so the existing
-release-backed preview resolver is not an approved deployment path. The
-replacement must preserve commit identity, artifact integrity, migration
-coverage and dependency-lockfile checks, and restrict deployment to explicitly
-selected pinned staging stacks without changing the fleet default.
+Staging migrator artifacts use an immutable object-storage prefix. The Docker
+workflow's optional `staging_artifact_base_url` input builds DB/shared tarballs
+and an integrity manifest as a GitHub Actions artifact; it has no release-write
+permission. Transfer those artifacts to the staging bucket using conditional
+creates, publishing the manifest last. Do not create GitHub releases or publish
+npm packages for this flow.
+
+Cloud enables this lane only in staging through
+`CLOUD_HARNESS_STAGING_ARTIFACT_BASE_URL`. Resolve `preview:<full SHA>` through
+its authenticated deployment API, then target the dedicated pinned stack.
+The configured origin, commit identity, artifact integrity, migration coverage,
+dependency lockfile and tenant readiness are checked before acceptance. Preview
+artifacts cannot become the fleet default. Record both the build workflow and
+the resulting object identities with the acceptance evidence.
