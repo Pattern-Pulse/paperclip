@@ -227,14 +227,12 @@ export async function prepareSandboxWorkFolders(input: {
       const root = path.posix.join(paths.repos!, binding.name);
       const probe = await target.runner!.execute({ command: "git", args: ["-C", root, "rev-parse", "--git-dir"], bypassSession: true, timeoutMs: 10_000 });
       const freshCheckout = probe.exitCode !== 0;
-      let restoredCheckout = false;
       if (freshCheckout) {
         // Publish the checkout directory only after every restore object or
         // clone step completes. An interrupted attempt cannot masquerade as a
         // reusable checkout merely because it contains a .git directory.
         const temporary = path.posix.join(staging, `repo-${binding.id}-${randomUUID()}`);
         const restored = await repositories.restore(binding, temporary, staging);
-        restoredCheckout = restored;
         if (!restored) {
           const auth = await resolveGitAuth(workspace.repoUrl!);
           const result = await target.runner!.execute({ command: "git", args: [...(auth?.configArgs ?? []), "clone", "--no-hardlinks",
@@ -265,9 +263,10 @@ export async function prepareSandboxWorkFolders(input: {
         }
         await transport.moveRoot(temporary, root);
       }
-      // A complete checkpoint already contains the setup's durable outputs.
-      // Replacing the sandbox must not repeat completed project setup.
-      if ((!binding.setupComplete || (freshCheckout && !restoredCheckout)) && workspace.setupCommand) {
+      // Warm checkouts retain completed setup. A replacement only restores
+      // durable repository files, so setup must recreate ignored dependencies
+      // and caches that are deliberately outside the checkpoint guarantee.
+      if ((!binding.setupComplete || freshCheckout) && workspace.setupCommand) {
         const setup = await target.runner!.execute({ command: "sh", args: ["-c", workspace.setupCommand], cwd: root, bypassSession: true, timeoutMs: 300_000 });
         if (setup.exitCode !== 0 || setup.timedOut) throw new Error(`Repository ${binding.name} setup failed`);
       }

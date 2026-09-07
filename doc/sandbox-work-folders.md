@@ -7,7 +7,10 @@ Set `PAPERCLIP_DEPLOYED_STACK_MANIFEST` to a JSON manifest matching
 and `PAPERCLIP_DEPLOYED_STACK_EVIDENCE` to an absolute output directory.
 The harness never launches a local server. It checks the deployed commit and
 adapter inventory, exercises scoped file APIs, and starts real sandbox tasks
-for every configured profile. Missing profiles fail the inventory gate.
+for every configured profile, including cold/warm Git state and real timed saves.
+The maintainer-approved matrix is Codex, Claude, OpenCode, and Pi in both runner
+generations (11 CLI/ACP profiles). Only Cursor, Gemini, Grok, and Kimi are deferred
+for this campaign. Missing required profiles fail the inventory gate.
 Credentials are not recorded in Playwright reports. These API checks supplement
 the required browser walkthrough, two real 180-second intervals, and recovery
 scenarios; passing them alone is not staging acceptance.
@@ -107,7 +110,9 @@ URL. Names derive from repository names, with stable workspace-ID suffixes on
 collisions. Initial clones use existing Git credentials and starting-ref policy;
 the primary clone also honors the task's configured branch. Warm starts never
 reset branches, clean edits, or rerun completed setup. Added repositories are
-prepared at the next startup; removed bindings retain saved work.
+prepared at the next startup; removed bindings retain saved work. Replacement
+sandboxes rerun project setup to restore excluded dependencies; an existing
+warm checkout keeps both its completed setup and reusable caches.
 
 A complete repository checkpoint includes Git objects, refs, HEAD and index,
 tracked working files, and nonignored untracked files. It excludes dependencies
@@ -123,7 +128,9 @@ directories are not supported by this checkpoint format.
 
 The task, agent, project, and current-user pages expose a Files dialog using the
 shared file tree and viewer. It supports uploads, folder creation, previews,
-downloads, deletion, trash restore/purge, and sync state with the last save time.
+downloads, deletion, trash restore/purge, and sync state with the last agent save
+time. Direct file-operation timestamps are labeled separately as “Files updated”;
+a delete, restore, or idempotent receipt is not presented as an agent checkpoint.
 
 All routes start at
 `/api/companies/:companyId/work-folders/:scope/:ownerId`:

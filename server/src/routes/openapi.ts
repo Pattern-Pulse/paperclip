@@ -5276,7 +5276,7 @@ const workFolderErrors = { 400: r.badRequest, 401: r.unauthorized, 404: r.notFou
 registry.registerPath({ method: "get", path: workFolderPath, tags: ["work-folders"], summary: "List scoped sandbox files or recoverable trash",
   description: "User files require the owning user or an authorized run acting for that user. Company access alone does not grant access.",
   request: { params: workFolderParams, query: z.object({ trash: z.enum(["true", "false"]).optional(), cursor: z.uuid().optional(), limit: z.coerce.number().int().min(1).max(1000).optional() }) },
-  responses: { ...workFolderErrors, 200: r.ok(z.object({ id: z.uuid(), owner: workFolderParams, files: z.array(workFileResponse), nextCursor: z.string().nullable(), lastSavedAt: z.string().nullable() })) },
+  responses: { ...workFolderErrors, 200: r.ok(z.object({ id: z.uuid(), owner: workFolderParams, files: z.array(workFileResponse), nextCursor: z.string().nullable(), lastOperationAt: z.string().nullable() })) },
 });
 registry.registerPath({ method: "get", path: `${workFolderPath}/content`, tags: ["work-folders"], summary: "Download a scoped file",
   request: { params: workFolderParams, query: z.object({ path: z.string() }) },

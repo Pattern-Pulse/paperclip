@@ -57,17 +57,17 @@ describe("durable work folders", () => {
     expect(await textContent(f, "memory.md")).toBe("second");
     await expect(svc.write(f, { ...first, body: Buffer.from("different") })).rejects.toMatchObject({ status: 409 });
   });
-  it("retains the last accepted save time after all files are removed", async () => {
+  it("retains the last accepted operation time after all files are removed", async () => {
     const f = await folder();
-    expect((await svc.list(f)).lastSavedAt).toBeNull();
+    expect((await svc.list(f)).lastOperationAt).toBeNull();
     await svc.write(f, { path: "note", body: Buffer.from("saved"), operationId: "write" });
-    const saved = (await svc.list(f)).lastSavedAt;
+    const saved = (await svc.list(f)).lastOperationAt;
     expect(saved).toEqual(expect.any(String));
     await svc.remove(f, "note", "delete");
     const listing = await svc.list(f);
     expect(listing.files).toEqual([]);
-    expect(Date.parse(listing.lastSavedAt!)).toBeGreaterThanOrEqual(Date.parse(saved!));
-    expect((await svc.list(f, { trash: true })).lastSavedAt).toBe(listing.lastSavedAt);
+    expect(Date.parse(listing.lastOperationAt!)).toBeGreaterThanOrEqual(Date.parse(saved!));
+    expect((await svc.list(f, { trash: true })).lastOperationAt).toBe(listing.lastOperationAt);
   });
   it("retains a deleted copy after the same path is recreated", async () => {
     const f = await folder();

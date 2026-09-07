@@ -47,6 +47,7 @@ async function buildSandboxTarget(input: {
   snapshot: EffectiveExecutionCapabilities | null;
   supportsSync: boolean;
   config?: Record<string, unknown>;
+  leaseMetadata?: Record<string, unknown>;
   // Reject the capability resolution to exercise the fail-closed error path.
   rejectResolution?: boolean;
 }) {
@@ -82,7 +83,7 @@ async function buildSandboxTarget(input: {
     adapterType: "codex_local",
     environment: { id: "env-1", driver: "sandbox", config: { provider: "daytona" } },
     leaseId: "lease-1",
-    leaseMetadata: { remoteCwd: "/work" },
+    leaseMetadata: { remoteCwd: "/work", ...input.leaseMetadata },
     lease: { id: "lease-1", leasePolicy: "reuse_by_environment", metadata: { remoteCwd: "/work", marker: "preserved" } } as never,
     environmentRuntime,
   });
@@ -283,6 +284,16 @@ describe("effective snapshot gates the sync decision", () => {
       }));
     }
     expect(target.remoteCwd).toBe("/work");
+  });
+
+  it("restores the host-bound sync home when reconstructing a target from its saved lease", async () => {
+    const { target, environmentRuntime } = await buildSandboxTarget({ snapshot: FULL_GRANT, supportsSync: true,
+      leaseMetadata: { workFolderHome: "/home/daytona" } });
+    expect(target.workFolderHome).toBe("/home/daytona");
+    await target.runner!.syncOut!([]);
+    expect(environmentRuntime.syncOut).toHaveBeenLastCalledWith(expect.objectContaining({
+      lease: expect.objectContaining({ metadata: expect.objectContaining({ remoteCwd: "/home/daytona" }) }),
+    }));
   });
 
   it("omits the native sync hooks when the snapshot removes a sync verb", async () => {

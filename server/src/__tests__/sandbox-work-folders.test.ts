@@ -37,11 +37,12 @@ describe("shared sandbox work-folder lifecycle", () => {
       const source = path.join(root, name);
       await exec("git", ["init", source]);
       await fs.writeFile(path.join(source, "tracked"), "initial\n");
+      await fs.writeFile(path.join(source, ".gitignore"), "node_modules/\n");
       await fs.symlink("tracked", path.join(source, "link"));
       await exec("git", ["-C", source, "add", "."]);
       await exec("git", ["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"]);
       await db.insert(projectWorkspaces).values({ companyId, projectId, name, repoUrl: source, sourceType: "git_repo", isPrimary: name === "repo-one",
-        setupCommand: "printf 'initialized\\n' >> .setup-count" });
+        setupCommand: "mkdir -p node_modules/acceptance && printf ready > node_modules/acceptance/installed && printf 'initialized\\n' >> .setup-count" });
     }
   }, 60_000);
   afterAll(async () => {
@@ -87,15 +88,19 @@ describe("shared sandbox work-folder lifecycle", () => {
   }, 120_000);
 
   it("reuses clones and restores saved unpushed work, staged changes, and task files after losing the sandbox", async () => {
+    const repositoryTaskId = randomUUID();
+    await db.insert(issues).values({ id: repositoryTaskId, companyId, projectId, title: "Repository recovery", assigneeAgentId: agentId });
+    const task = { taskId: repositoryTaskId };
     const home = path.join(root, "sandbox");
     const leaseId = randomUUID();
-    const first = await prepare(home, leaseId);
+    const first = await prepare(home, leaseId, leaseId, null, task);
     expect(first.home).toBe(home);
     expect(first.manifest.repositories).toHaveLength(2);
     expect(first.primaryRepo).toBe(path.join(home, "repos/repo-one"));
     await fs.writeFile(path.join(home, "task/report.md"), "durable task file");
     const repo = first.primaryRepo;
     expect(await fs.readFile(path.join(repo, ".setup-count"), "utf8")).toBe("initialized\n");
+    await fs.writeFile(path.join(repo, "node_modules/acceptance/warm-cache"), "reusable");
     await fs.writeFile(path.join(repo, "tracked"), "committed\n");
     await exec("git", ["-C", repo, "add", "."]);
     await exec("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "unpushed"]);
@@ -105,13 +110,17 @@ describe("shared sandbox work-folder lifecycle", () => {
     await fs.writeFile(path.join(repo, "tracked"), "unstaged\n");
     await fs.writeFile(path.join(repo, "untracked"), "untracked\n");
     await first.stop(); active.splice(active.indexOf(first), 1);
-    const warm = await prepare(home, randomUUID(), leaseId);
+    const warm = await prepare(home, randomUUID(), leaseId, null, task);
     expect(await fs.readFile(path.join(repo, ".setup-count"), "utf8")).toBe("initialized\n");
+    expect(await fs.readFile(path.join(repo, "node_modules/acceptance/warm-cache"), "utf8")).toBe("reusable");
     expect(await fs.readFile(path.join(repo, "tracked"), "utf8")).toBe("unstaged\n");
     await warm.stop(); active.splice(active.indexOf(warm), 1);
     await fs.rm(home, { recursive: true });
-    const restored = await prepare(path.join(root, "replacement"), randomUUID());
-    expect(await fs.readFile(path.join(restored.primaryRepo, ".setup-count"), "utf8")).toBe("initialized\n");
+    const replacementId = randomUUID();
+    const restored = await prepare(path.join(root, "replacement"), replacementId, replacementId, null, task);
+    expect(await fs.readFile(path.join(restored.primaryRepo, ".setup-count"), "utf8")).toBe("initialized\ninitialized\n");
+    expect(await fs.readFile(path.join(restored.primaryRepo, "node_modules/acceptance/installed"), "utf8")).toBe("ready");
+    await expect(fs.stat(path.join(restored.primaryRepo, "node_modules/acceptance/warm-cache"))).rejects.toMatchObject({ code: "ENOENT" });
     expect(await fs.readFile(path.join(restored.home, "task/report.md"), "utf8")).toBe("durable task file");
     expect((await exec("git", ["-C", restored.primaryRepo, "rev-parse", "HEAD"])).stdout.trim()).toBe(expectedHead);
     expect((await exec("git", ["-C", restored.primaryRepo, "show", ":tracked"])).stdout).toBe("staged\n");
