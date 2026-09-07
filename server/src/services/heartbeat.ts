@@ -18039,6 +18039,7 @@ export function heartbeatService(
     let runScratch: HeartbeatRunScratch | null = null;
     let sandboxWorkFolders: Awaited<ReturnType<typeof prepareSandboxWorkFolders>> | null = null;
     let workFolderSaveFailed = false;
+    let nativeTaskSessionPersisted = false;
     let workFolderLeaseId: string | null = null;
     let nativeSessionResumeScheduled = false;
     let nativeWorkspaceFinalizeScheduled = false;
@@ -21610,6 +21611,34 @@ export function heartbeatService(
           // rather than silently leaving dependents stranded behind a missing
           // finalize row.
           if (sandboxWorkFolders) {
+            if (adapterResult.nativeFinalization && taskKey) {
+              // Publish the resumable identity before the final file-save
+              // barrier lets native reconciliation expose terminal status.
+              // A user can start the next turn as soon as completion appears.
+              const sessionState = resolveNextSessionState({
+                adapterType: agent.adapterType,
+                codec: sessionCodec,
+                adapterResult,
+                outcome: adapterResult.nativeFinalization.terminal.runTerminalState === "succeeded"
+                  ? "succeeded" : "failed",
+                previousParams: previousSessionParams,
+                previousDisplayId: runtimeForAdapter.sessionDisplayId,
+                previousLegacySessionId: runtimeForAdapter.sessionId,
+              });
+              await upsertTaskSession({
+                companyId: agent.companyId,
+                agentId: agent.id,
+                adapterType: agent.adapterType,
+                taskKey,
+                sessionParamsJson: attachPaperclipSessionMetadataToSessionParams(
+                  sessionState.params, configuredModel, sessionConfigMetadata,
+                ),
+                sessionDisplayId: sessionState.displayId,
+                lastRunId: run.id,
+                lastError: adapterResult.errorMessage ?? null,
+              });
+              nativeTaskSessionPersisted = true;
+            }
             workFolderSaveFailed = true;
             await sandboxWorkFolders.stop();
             sandboxWorkFolders = null;
@@ -22318,7 +22347,7 @@ export function heartbeatService(
             },
             normalizedUsage,
           );
-          if (taskKey) {
+          if (taskKey && !nativeTaskSessionPersisted) {
             if (
               adapterResult.clearSession ||
               (!nextSessionState.params && !nextSessionState.displayId)
@@ -22617,6 +22646,7 @@ export function heartbeatService(
 
           if (
             taskKey &&
+            !nativeTaskSessionPersisted &&
             (previousSessionParams || previousSessionDisplayId || taskSession)
           ) {
             await upsertTaskSession({
