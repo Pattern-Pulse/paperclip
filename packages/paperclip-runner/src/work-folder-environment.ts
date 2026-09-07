@@ -14,6 +14,11 @@ export function externalWorkFolderEnvironment(source: NodeJS.ProcessEnv): NodeJS
   }
   result.AGENT_HOME = path.join(home, "agent");
   const primary = source.PAPERCLIP_PRIMARY_REPO;
-  if (primary && (primary.startsWith(`${home}/repos/`) || primary === `${home}/task`)) result.PAPERCLIP_PRIMARY_REPO = primary;
+  if (primary) {
+    if (path.resolve(primary) !== primary || !(primary.startsWith(`${home}/repos/`) || primary === `${home}/task`)) {
+      throw new Error("Invalid sandbox primary repository path");
+    }
+    result.PAPERCLIP_PRIMARY_REPO = primary;
+  }
   return result;
 }

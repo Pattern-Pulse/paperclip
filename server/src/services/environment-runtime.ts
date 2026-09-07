@@ -1794,6 +1794,10 @@ function createSandboxEnvironmentDriver(
         }
 
         const workerConfig = stripSandboxProviderEnvelope(parsed.config);
+        // A provider reaper must not delete the only copy after a failed final
+        // checkpoint. Normal release still deletes ephemeral sandboxes after
+        // the host confirms durability; idle stop/archive remains enabled.
+        if (boundRun && parsed.config.provider === "daytona") workerConfig.autoDeleteInterval = -1;
         const storedConfig = storedParsed.config;
         const providerConfigForLease = sandboxConfigForLeaseMetadata(storedConfig);
         // Require the reusable-lease capability AND a worker that verifies the
@@ -1816,7 +1820,6 @@ function createSandboxEnvironmentDriver(
           declaredReusableLeases && capabilityIsVerified("reusableLeases", pluginVerifiedMethods);
         const leaseFingerprint =
           supportsReusableLeases &&
-          parsed.config.reuseLease &&
           input.heartbeatRunId !== null &&
           input.executionWorkspaceId !== null &&
           input.agentId !== null
@@ -1845,13 +1848,12 @@ function createSandboxEnvironmentDriver(
         // or terminal rows cannot be matched.
         const reusableCandidateLeases =
           supportsReusableLeases &&
-          parsed.config.reuseLease &&
           input.heartbeatRunId !== null &&
           input.executionWorkspaceId !== null &&
           input.agentId !== null
           ? (await environmentsSvc.listLeases(input.environment.id))
               .filter((lease) =>
-                lease.leasePolicy === "reuse_by_environment" &&
+                ((parsed.config.reuseLease && lease.leasePolicy === "reuse_by_environment") || lease.metadata?.workFolderRecoveryRequired === true) &&
                 reusableLeaseCanBeResumed({ lease, heartbeatRunId: input.heartbeatRunId }) &&
                 lease.executionWorkspaceId === input.executionWorkspaceId &&
                 lease.metadata?.agentId === input.agentId,
@@ -1876,6 +1878,9 @@ function createSandboxEnvironmentDriver(
               lease.heartbeatRunId === input.heartbeatRunId,
           }),
         );
+        if (reusableCandidateLeases.some((lease) => lease.metadata?.workFolderRecoveryRequired === true && !reusableExistingLeases.includes(lease))) {
+          throw new Error("Unsaved sandbox work requires recovery with its original run identity and configuration");
+        }
         if (reusableCandidateLeases.length > reusableExistingLeases.length) {
           await cleanupObsoleteReusableSandboxLeases({
             environment: input.environment,
@@ -1885,7 +1890,6 @@ function createSandboxEnvironmentDriver(
         }
         const reusableProviderLeaseId =
           supportsReusableLeases &&
-          parsed.config.reuseLease &&
           input.heartbeatRunId !== null &&
           input.executionWorkspaceId !== null &&
           input.agentId !== null
@@ -1982,6 +1986,9 @@ function createSandboxEnvironmentDriver(
             });
           }
           if (!providerLease) {
+            if (await retainUnsavedWorkFolderLease(db, reusableLease)) {
+              throw new Error("Saved sandbox could not be resumed; unsaved work was retained for recovery");
+            }
             if (
               input.adapterType === "paperclip_runner" &&
               !verifyNativeHarnessBackupStamp(
@@ -2046,7 +2053,7 @@ function createSandboxEnvironmentDriver(
           metadata: acquiredLease.metadata,
           schema: pluginProvider.resolved.driver.configSchema as Record<string, unknown> | null | undefined,
         });
-        const reusableScope = resolvedLeasePolicy === "reuse_by_environment"
+        const reusableScope = supportsReusableLeases && input.heartbeatRunId !== null
           ? buildReusableSandboxLeaseScope({
               responsibleUserId,
             issueId: input.issueId,
@@ -2186,7 +2193,6 @@ function createSandboxEnvironmentDriver(
       const providerConfigForLease = sandboxConfigForLeaseMetadata(parsed.config);
       const leaseFingerprint =
         supportsReusableLeases &&
-        parsed.config.reuseLease &&
         input.heartbeatRunId !== null &&
         input.executionWorkspaceId !== null &&
         input.agentId !== null
@@ -2203,13 +2209,12 @@ function createSandboxEnvironmentDriver(
           : null;
       const reusableCandidateLeases =
         supportsReusableLeases &&
-        parsed.config.reuseLease &&
         input.heartbeatRunId !== null &&
         input.executionWorkspaceId !== null &&
         input.agentId !== null
           ? (await environmentsSvc.listLeases(input.environment.id))
               .filter((lease) =>
-                lease.leasePolicy === "reuse_by_environment" &&
+                ((parsed.config.reuseLease && lease.leasePolicy === "reuse_by_environment") || lease.metadata?.workFolderRecoveryRequired === true) &&
                 reusableLeaseCanBeResumed({ lease, heartbeatRunId: input.heartbeatRunId }) &&
                 lease.executionWorkspaceId === input.executionWorkspaceId &&
                 lease.metadata?.agentId === input.agentId,
@@ -2234,6 +2239,9 @@ function createSandboxEnvironmentDriver(
             lease.heartbeatRunId === input.heartbeatRunId,
         }),
       );
+      if (reusableCandidateLeases.some((lease) => lease.metadata?.workFolderRecoveryRequired === true && !reusableExistingLeases.includes(lease))) {
+        throw new Error("Unsaved sandbox work requires recovery with its original run identity and configuration");
+      }
       if (reusableCandidateLeases.length > reusableExistingLeases.length) {
         await cleanupObsoleteReusableSandboxLeases({
           environment: input.environment,
@@ -2243,7 +2251,6 @@ function createSandboxEnvironmentDriver(
       }
       const reusableProviderLeaseId =
         supportsReusableLeases &&
-        parsed.config.reuseLease &&
         input.heartbeatRunId !== null &&
         input.executionWorkspaceId !== null &&
         input.agentId !== null
@@ -2290,7 +2297,7 @@ function createSandboxEnvironmentDriver(
       const resolvedLeasePolicy = supportsReusableLeases && parsed.config.reuseLease && input.heartbeatRunId !== null
         ? "reuse_by_environment"
         : "ephemeral";
-      const reusableScope = resolvedLeasePolicy === "reuse_by_environment"
+      const reusableScope = supportsReusableLeases && input.heartbeatRunId !== null
         ? buildReusableSandboxLeaseScope({
             responsibleUserId,
             issueId: input.issueId,

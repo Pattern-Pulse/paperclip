@@ -15,5 +15,6 @@ describe("external sandbox work-folder environment", () => {
   it("leaves local execution unchanged and rejects inconsistent sandbox bindings", () => {
     expect(externalWorkFolderEnvironment({ ...environment, PAPERCLIP_RUNNER_EXTERNAL_SANDBOX: undefined })).toEqual({});
     expect(() => externalWorkFolderEnvironment({ ...environment, PAPERCLIP_USER_DIR: "/other/user" })).toThrow("does not match");
+    expect(() => externalWorkFolderEnvironment({ ...environment, PAPERCLIP_PRIMARY_REPO: `${home}/repos/../../.codex` })).toThrow("Invalid sandbox primary");
   });
 });

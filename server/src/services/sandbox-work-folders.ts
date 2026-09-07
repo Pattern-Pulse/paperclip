@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
-import { assets, issueAttachments, projectWorkspaces, taskRepositoryBindings, workFileOperations, workFolderRuns, workFolders, type Db } from "@paperclipai/db";
+import { agents, assets, companyMemberships, heartbeatRuns, issues, projects, issueAttachments, projectWorkspaces, taskRepositoryBindings, workFileOperations, workFolderRuns, workFolders, type Db } from "@paperclipai/db";
 import { WORK_FOLDER_SCOPES, type SandboxWorkFolderManifest, type WorkFolderScope } from "@paperclipai/shared";
 import type { AdapterSandboxExecutionTarget } from "@paperclipai/adapter-utils/execution-target";
 import type { StorageProvider } from "../storage/types.js";
@@ -15,6 +15,7 @@ import { workFolderService } from "./work-folders.js";
 import { workFolderPaths, workFolderTransport, type WorkTreeEntry } from "./work-folder-transport.js";
 import { workFolderRepositoryService } from "./work-folder-repositories.js";
 import { startWorkFolderCheckpointer } from "./work-folder-checkpointer.js";
+import { assertWorkFolderAccess } from "./work-folder-access.js";
 
 function signature(entry: WorkTreeEntry | undefined) {
   return entry ? JSON.stringify([entry.kind, entry.sha256, entry.executable]) : "missing";
@@ -28,10 +29,43 @@ function repoName(value: string, id: string) {
 export async function prepareSandboxWorkFolders(input: {
   db: Db; companyId: string; runId: string; agentId: string; responsibleUserId: string | null;
   taskId: string | null; projectId: string | null; target: AdapterSandboxExecutionTarget;
+  primaryWorkspaceId?: string | null; primaryBranchName?: string | null;
   storage?: StorageProvider; sandboxKey?: string;
 }) {
   const { db, target } = input;
   if (!target.runner || !target.leaseId) throw new Error("Sandbox file transport is unavailable");
+  async function assertBindings() {
+    const memberships: Array<{ companyId: string; membershipRole: string | null; status: string }> = [];
+    const deny = () => { throw new Error("Sandbox work-folder access is no longer authorized; working files were retained"); };
+    const [run] = await db.select().from(heartbeatRuns).where(and(eq(heartbeatRuns.id, input.runId), eq(heartbeatRuns.companyId, input.companyId)));
+    if (!run || run.agentId !== input.agentId || run.responsibleUserId !== input.responsibleUserId) deny();
+    const [agent] = await db.select({ id: agents.id }).from(agents).where(and(eq(agents.id, input.agentId), eq(agents.companyId, input.companyId)));
+    if (!agent) deny();
+    if (input.taskId) {
+      const [task] = await db.select({ id: issues.id }).from(issues).where(and(eq(issues.id, input.taskId), eq(issues.companyId, input.companyId)));
+      if (!task) deny();
+    }
+    if (input.projectId) {
+      const [project] = await db.select({ id: projects.id }).from(projects).where(and(eq(projects.id, input.projectId), eq(projects.companyId, input.companyId)));
+      if (!project) deny();
+    }
+    if (input.responsibleUserId) {
+      const [membership] = await db.select().from(companyMemberships).where(and(eq(companyMemberships.companyId, input.companyId),
+        eq(companyMemberships.principalType, "user"), eq(companyMemberships.principalId, input.responsibleUserId), eq(companyMemberships.status, "active")));
+      if (!membership || membership.membershipRole === "viewer") deny();
+      if (membership) memberships.push({ companyId: membership.companyId, membershipRole: membership.membershipRole, status: membership.status });
+    }
+    for (const [scope, ownerId] of [["task", input.taskId], ["agent", input.agentId], ["project", input.projectId]] as const) {
+      if (!ownerId) continue;
+      await assertWorkFolderAccess(db, { type: "agent", source: "agent_jwt", companyId: input.companyId,
+        agentId: input.agentId, runId: input.runId, onBehalfOfUserId: input.responsibleUserId, onBehalfOfMemberships: memberships },
+      { companyId: input.companyId, scope, ownerId }, true);
+    }
+  }
+  // Host-side transfers do not go through HTTP authorization middleware. Check
+  // the authoritative bindings here too, including after membership revocation.
+  // An ended heartbeat may still flush; its immutable identity must still match.
+  await assertBindings();
   const storage = input.storage ?? createStorageProviderFromConfig(loadConfig());
   const svc = workFolderService(db, storage);
   const transport = workFolderTransport(target.runner);
@@ -77,11 +111,11 @@ export async function prepareSandboxWorkFolders(input: {
       const [seeded] = await db.select().from(workFileOperations).where(and(eq(workFileOperations.folderId, folders.task.id),
         eq(workFileOperations.operationId, operationId)));
       if (seeded) continue;
-      const original = (asset.originalFilename ?? attachment.id).split(/[\\/]/).at(-1)!.replace(/[\x00-\x1f\x7f]/g, "_") || attachment.id;
-      let filename = original;
-      try { await svc.get(folders.task, filename); filename = `${original}-${attachment.id}`; } catch (error) {
-        if ((error as { status?: number }).status !== 404) throw error;
-      }
+      const original = (asset.originalFilename ?? "attachment").split(/[\\/]/).at(-1)!.replace(/[\x00-\x1f\x7f]/g, "_").slice(0, 180) || "attachment";
+      // The ID makes the destination independent of concurrent uploads and
+      // earlier seeding attempts. Even dot/reserved filenames become safe.
+      const extension = path.posix.extname(original);
+      const filename = `${original.slice(0, original.length - extension.length)}-${attachment.id}${extension}`;
       const result = await storage.getObject({ objectKey: asset.objectKey });
       try { await svc.write(folders.task, { path: filename, body: result.stream, contentType: asset.contentType, operationId, onlyIfMissing: true }); }
       finally { result.stream.destroy(); }
@@ -103,7 +137,7 @@ export async function prepareSandboxWorkFolders(input: {
       if (stat.isDirectory()) {
         if (relative) await svc.write(folder, { path: relative, kind: "directory", operationId: `import:${relative}`, onlyIfMissing: true });
         for (const name of (await fs.readdir(path.join(root, relative))).sort()) {
-          if ([".codex", ".claude", ".cache", ".config", ".local", ".git", ".paperclip-runtime"].includes(name)) continue;
+          if ([".codex", ".claude", ".cache", ".config", ".local", ".git", ".paperclip-runtime", ".ssh", ".aws", ".azure", ".netrc", ".git-credentials", ".npmrc", ".npm", "node_modules", ".venv"].includes(name)) continue;
           await visit(relative ? `${relative}/${name}` : name);
         }
       } else if (stat.isFile()) {
@@ -192,6 +226,7 @@ export async function prepareSandboxWorkFolders(input: {
     const names = new Set(existing.map((binding) => binding.name));
     const resolveGitAuth = createGitRemoteAuthProvider(db, input.companyId, { responsibleUserId: input.responsibleUserId, agentId: input.agentId, issueId: input.taskId, heartbeatRunId: input.runId });
     for (const workspace of workspaces.filter((entry) => entry.repoUrl)) {
+      const primary = input.primaryWorkspaceId ? workspace.id === input.primaryWorkspaceId : workspace.isPrimary;
       let binding = existing.find((entry) => entry.workspaceId === workspace.id);
       if (!binding) {
         const baseName = repoName(workspace.repoUrl!.split(/[/:]/).at(-1) ?? workspace.name, workspace.id);
@@ -222,6 +257,18 @@ export async function prepareSandboxWorkFolders(input: {
             const checkout = await target.runner!.execute({ command: "git", args: ["-C", temporary, "checkout", binding.repoRef, "--"], bypassSession: true, timeoutMs: 60_000 });
             if (checkout.exitCode !== 0 || checkout.timedOut) throw new Error(`Required repository ${binding.name} ref could not be checked out`);
           }
+          if (primary && input.primaryBranchName) {
+            const branch = input.primaryBranchName;
+            const valid = await target.runner!.execute({ command: "git", args: ["check-ref-format", "--branch", branch], bypassSession: true, timeoutMs: 10_000 });
+            if (valid.exitCode !== 0 || valid.stdout.trim() !== branch) throw new Error(`Required repository ${binding.name} branch is invalid`);
+            // Honor the task's existing branch policy on the initial clone.
+            // Restores and warm starts keep the saved HEAD and index untouched.
+            const checkout = await target.runner!.execute({ command: "git", args: ["-C", temporary, "checkout", branch, "--"], bypassSession: true, timeoutMs: 60_000 });
+            if (checkout.exitCode !== 0) {
+              const create = await target.runner!.execute({ command: "git", args: ["-C", temporary, "checkout", "-b", branch], bypassSession: true, timeoutMs: 60_000 });
+              if (create.exitCode !== 0 || create.timedOut) throw new Error(`Required repository ${binding.name} task branch could not be created`);
+            }
+          }
         } else {
           const init = await target.runner!.execute({ command: "git", args: ["-C", temporary, "init"], bypassSession: true, timeoutMs: 10_000 });
           if (init.exitCode !== 0) throw new Error(`Repository ${binding.name} could not be restored`);
@@ -236,7 +283,7 @@ export async function prepareSandboxWorkFolders(input: {
       }
       await db.update(taskRepositoryBindings).set({ setupComplete: true, retiredAt: null }).where(eq(taskRepositoryBindings.id, binding.id));
       bindings.push({ binding, root });
-      manifest.repositories.push({ bindingId: binding.id, workspaceId: workspace.id, name: binding.name, primary: workspace.isPrimary });
+      manifest.repositories.push({ bindingId: binding.id, workspaceId: workspace.id, name: binding.name, primary });
       await saveState("starting");
     }
     for (const old of existing) if (!workspaces.some((workspace) => workspace.id === old.workspaceId)) {
@@ -263,6 +310,7 @@ export async function prepareSandboxWorkFolders(input: {
   }
   const checkpointer = startWorkFolderCheckpointer({
     async checkpoint() {
+      await assertBindings();
       await saveState("saving");
       for (const scope of WORK_FOLDER_SCOPES) await outgoing(scope);
       for (const { binding, root } of bindings) await repositories.checkpoint(binding, root);
@@ -280,6 +328,7 @@ export async function prepareSandboxWorkFolders(input: {
       if (run?.refreshRequested) {
         // The agent has stopped. The successful final flush above protects its
         // edits before accepting incoming shared files at this safe boundary.
+        await assertBindings();
         for (const scope of WORK_FOLDER_SCOPES) await incoming(scope);
         await db.update(workFolderRuns).set({ refreshRequested: false, baselines, updatedAt: new Date() })
           .where(eq(workFolderRuns.runId, input.runId));

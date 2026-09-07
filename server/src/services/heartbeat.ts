@@ -19743,6 +19743,7 @@ export function heartbeatService(
         sandboxWorkFolders = await prepareSandboxWorkFolders({ db, companyId: run.companyId, runId: run.id,
           agentId: agent.id, responsibleUserId: run.responsibleUserId ?? null,
           taskId: issueRef?.id ?? null, projectId: issueRef?.projectId ?? null, target: executionTarget,
+          primaryWorkspaceId: executionWorkspace.workspaceId, primaryBranchName: executionWorkspace.branchName,
           sandboxKey: workFolderSandboxKey(activeEnvironmentLease.lease) });
         if (sandboxWorkFolders.identityChanged) { taskSessionForRun = null; previousSessionParams = null; }
         executionTarget.workFolderHome = sandboxWorkFolders.home;

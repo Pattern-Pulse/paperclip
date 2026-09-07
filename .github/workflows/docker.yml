@@ -13,6 +13,11 @@ on:
   # the new tag ref instead. The tag mapping below keys off github.ref either
   # way.
   workflow_dispatch:
+    inputs:
+      preview_migrator:
+        description: Publish a commit-specific migrator prerelease for an explicitly pinned staging stack (no npm or fleet promotion)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -26,6 +31,49 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  preview-migrator:
+    if: github.event_name == 'workflow_dispatch' && inputs.preview_migrator
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Require a non-default branch
+        env:
+          REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          [[ "$REF" == refs/heads/* && "$REF" != "refs/heads/$DEFAULT_BRANCH" ]]
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.4
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: pnpm install --frozen-lockfile
+      - name: Build matching migrator artifacts
+        run: node scripts/build-preview-migrator.mjs "$RUNNER_TEMP/preview-migrator"
+      - name: Publish immutable candidate assets without promotion
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="preview/$GITHUB_SHA"
+          # Never overwrite an earlier candidate, including a partially
+          # published draft. A failed upload stays inspectable for recovery.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Preview release already exists; refusing to replace its assets" >&2
+            exit 1
+          fi
+          gh release create "$tag" --target "$GITHUB_SHA" --draft --prerelease --latest=false \
+            --title "Staging preview $GITHUB_SHA" \
+            --notes "Commit-specific Cloud migrator. No npm publish or fleet default promotion. Deploy only to explicitly selected pinned stacks."
+          gh release upload "$tag" "$RUNNER_TEMP/preview-migrator/preview-migrator.json" \
+            "$RUNNER_TEMP/preview-migrator/paperclipai-db.tgz" "$RUNNER_TEMP/preview-migrator/paperclipai-shared.tgz"
+          gh release edit "$tag" --draft=false --prerelease --latest=false
+
   build-and-push:
     runs-on: ubuntu-latest
     timeout-minutes: 60

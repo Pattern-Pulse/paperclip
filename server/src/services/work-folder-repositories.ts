@@ -56,8 +56,9 @@ export function workFolderRepositoryService(db: Db, storage: StorageProvider, tr
       for (let offset = 0; offset < published.length; offset += 1000) {
         await tx.update(workFolderObjects).set({ deleteAfter: null }).where(inArray(workFolderObjects.objectKey, published.slice(offset, offset + 1000)));
       }
-    await tx.update(taskRepositoryBindings).set({ checkpointKey, checkpointSha256: digest, checkpointAt: new Date() })
-      .where(and(eq(taskRepositoryBindings.id, binding.id), eq(taskRepositoryBindings.companyId, binding.companyId)));
+      const updated = await tx.update(taskRepositoryBindings).set({ checkpointKey, checkpointSha256: digest, checkpointAt: new Date() })
+        .where(and(eq(taskRepositoryBindings.id, binding.id), eq(taskRepositoryBindings.companyId, binding.companyId))).returning({ id: taskRepositoryBindings.id });
+      if (!updated.length) throw new Error("Repository owner was deleted during checkpoint");
     });
     knownByBinding.set(binding.id, new Set(files.flatMap((file) => file.objectKey ? [file.objectKey] : [])));
     binding.checkpointKey = checkpointKey;

@@ -1,11 +1,12 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { agents, companies, createDb, heartbeatRuns, issues, environments, environmentLeases, projects, projectWorkspaces, startEmbeddedPostgresTestDatabase, type Db } from "@paperclipai/db";
+import { agents, assets, companyMemberships, issueAttachments, companies, createDb, heartbeatRuns, issues, environments, environmentLeases, projects, projectWorkspaces, taskRepositoryBindings, startEmbeddedPostgresTestDatabase, type Db } from "@paperclipai/db";
 import { createLocalDiskStorageProvider } from "../storage/local-disk-provider.js";
 import { prepareSandboxWorkFolders } from "../services/sandbox-work-folders.js";
 import { retainUnsavedWorkFolderLease, workFolderSandboxKey } from "../services/work-folder-retention.js";
@@ -44,14 +45,14 @@ describe("shared sandbox work-folder lifecycle", () => {
     for (const run of active) await run.stop().catch(() => {});
     await database?.cleanup(); if (root) await fs.rm(root, { recursive: true, force: true });
   });
-  async function prepare(home: string, leaseId: string, physicalId = leaseId) {
+  async function prepare(home: string, leaseId: string, physicalId = leaseId, responsibleUserId: string | null = null) {
     await fs.mkdir(home, { recursive: true });
     const runId = randomUUID();
-    await db.insert(heartbeatRuns).values({ id: runId, companyId, agentId, status: "running" });
+    await db.insert(heartbeatRuns).values({ id: runId, companyId, agentId, responsibleUserId, status: "running" });
     const lease = { id: leaseId, companyId, environmentId, provider: "test", providerLeaseId: physicalId };
     await db.insert(environmentLeases).values({ ...lease, heartbeatRunId: runId }).onConflictDoUpdate({ target: environmentLeases.id, set: { heartbeatRunId: runId } });
     const run = await prepareSandboxWorkFolders({ db, companyId, agentId, projectId, taskId, runId,
-      responsibleUserId: null, storage, sandboxKey: workFolderSandboxKey(lease), target: { kind: "remote", transport: "sandbox", leaseId, remoteCwd: home,
+      responsibleUserId, storage, sandboxKey: workFolderSandboxKey(lease), target: { kind: "remote", transport: "sandbox", leaseId, remoteCwd: home,
         runner: { execute: (input) => localTestWorkFolderRunner.execute({ ...input, env: { ...input.env, HOME: home } }) } } });
     active.push(run); return run;
   }
@@ -123,4 +124,78 @@ describe("shared sandbox work-folder lifecycle", () => {
     await resumed.stop(); active.splice(active.indexOf(resumed), 1);
   }, 120_000);
 
+  it("stops private-file synchronization after responsible-user membership is revoked", async () => {
+    const userId = randomUUID();
+    const [membership] = await db.insert(companyMemberships).values({ companyId, principalType: "user", principalId: userId, membershipRole: "member" }).returning();
+    const leaseId = randomUUID();
+    const run = await prepare(path.join(root, "revoked-user"), leaseId, leaseId, userId);
+    await fs.writeFile(path.join(run.home, "user/private"), "pending private edit");
+    await db.update(companyMemberships).set({ status: "inactive" }).where(eq(companyMemberships.id, membership!.id));
+    await expect(run.stop()).rejects.toThrow("no longer authorized");
+    expect(await retainUnsavedWorkFolderLease(db, { id: leaseId, companyId })).toBe(true);
+    const svc = workFolderService(db, storage);
+    const folder = await svc.ensure({ companyId, scope: "user", ownerId: userId });
+    expect((await svc.list(folder)).files).toHaveLength(0);
+    expect(await fs.readFile(path.join(run.home, "user/private"), "utf8")).toBe("pending private edit");
+    await db.update(companyMemberships).set({ status: "active" }).where(eq(companyMemberships.id, membership!.id));
+    await run.stop(); active.splice(active.indexOf(run), 1);
+  }, 120_000);
+
+  it("does not publish a partial repository checkpoint and retries a failed final save", async () => {
+    const leaseId = randomUUID();
+    const run = await prepare(path.join(root, "interrupted-checkpoint"), leaseId);
+    await run.flush();
+    const bindingId = run.manifest.repositories[0]!.bindingId;
+    const [before] = await db.select().from(taskRepositoryBindings).where(eq(taskRepositoryBindings.id, bindingId));
+    await fs.writeFile(path.join(run.primaryRepo, "new-unsaved-file"), "must survive a failed save");
+    const put = storage.putObject.bind(storage);
+    const fail = vi.spyOn(storage, "putObject").mockImplementation(async (input) => {
+      if (input.objectKey.includes("/checkpoints/")) throw new Error("Injected storage outage");
+      return put(input);
+    });
+    try {
+      await expect(run.stop()).rejects.toThrow("Injected storage outage");
+      const [after] = await db.select().from(taskRepositoryBindings).where(eq(taskRepositoryBindings.id, bindingId));
+      expect(after!.checkpointKey).toBe(before!.checkpointKey);
+      expect(await retainUnsavedWorkFolderLease(db, { id: leaseId, companyId })).toBe(true);
+    } finally { fail.mockRestore(); }
+    await run.stop(); active.splice(active.indexOf(run), 1);
+    await fs.rm(run.home, { recursive: true });
+    const recovered = await prepare(path.join(root, "interrupted-recovered"), randomUUID());
+    expect(await fs.readFile(path.join(recovered.primaryRepo, "new-unsaved-file"), "utf8")).toBe("must survive a failed save");
+    await recovered.stop(); active.splice(active.indexOf(recovered), 1);
+  }, 120_000);
+
+  it("seeds duplicate and reserved attachment names idempotently without changing original uploads", async () => {
+    const attachmentIds: string[] = [];
+    const originalKeys: string[] = [];
+    const content = Buffer.from("original upload");
+    for (const originalFilename of ["same.txt", "same.txt", ".", ".paperclip-runtime"]) {
+      const id = randomUUID();
+      const objectKey = `${companyId}/attachments/${id}`;
+      originalKeys.push(objectKey);
+      await storage.putObject({ objectKey, body: content, contentType: "text/plain", contentLength: content.length });
+      await db.insert(assets).values({ id, companyId, provider: storage.id, objectKey, contentType: "text/plain", byteSize: content.length,
+        sha256: createHash("sha256").update(content).digest("hex"), originalFilename });
+      const attachmentId = randomUUID(); attachmentIds.push(attachmentId);
+      await db.insert(issueAttachments).values({ id: attachmentId, companyId, issueId: taskId, assetId: id });
+    }
+    const leaseId = randomUUID();
+    const home = path.join(root, "attachment-seeding");
+    const first = await prepare(home, leaseId);
+    const files = (await fs.readdir(path.join(home, "task"))).filter((file) => attachmentIds.some((id) => file.includes(id)));
+    expect(files).toHaveLength(4);
+    await fs.writeFile(path.join(home, "task", files[0]!), "edited working copy");
+    await first.stop(); active.splice(active.indexOf(first), 1);
+    const warm = await prepare(home, randomUUID(), leaseId);
+    expect(await fs.readFile(path.join(home, "task", files[0]!), "utf8")).toBe("edited working copy");
+    expect((await fs.readdir(path.join(home, "task"))).filter((file) => attachmentIds.some((id) => file.includes(id)))).toEqual(files);
+    await warm.stop(); active.splice(active.indexOf(warm), 1);
+    for (const objectKey of originalKeys) {
+      const original = await storage.getObject({ objectKey });
+      const chunks: Buffer[] = [];
+      for await (const chunk of original.stream) chunks.push(Buffer.from(chunk));
+      expect(Buffer.concat(chunks)).toEqual(content);
+    }
+  }, 120_000);
 });
