@@ -67,7 +67,8 @@ for (const [scope, owner] of [["task", stack.taskId], ["agent", stack.agentId], 
 }
 
 for (const profile of stack.profiles) {
-  test(`${profile.id} creates durable work from the actual sandbox home`, async ({}, info) => {
+  test(`${profile.id} preserves task-specific repo and file state across cold and warm runs`, async ({}, info) => {
+    test.setTimeout(1_800_000);
     const nonce = randomUUID();
     const issue = await api.json<{ id: string; identifier: string }>(`/api/companies/${stack.companyId}/issues`, "POST", {
       title: `Work folder acceptance ${profile.id} ${nonce}`, projectId: stack.projectId,
@@ -76,13 +77,18 @@ for (const profile of stack.profiles) {
         "Perform this sandbox acceptance task using real filesystem tools.",
         "Verify cwd equals the operating-system HOME and task, agent, user, project, repos, .codex, .cache are directories beneath it.",
         "Verify repos contains at least two independent Git checkouts. Fail the task with the actual error if either assertion fails.",
+        "In each repo, assert .acceptance-owner does not exist (another task must not share this checkout).",
+        `In each repo write '${nonce}' without a newline to .acceptance-owner, git add ONLY that file, and create a local commit using git -c user.name=Acceptance -c user.email=acceptance@example.invalid commit -m acceptance. Do not push.`,
+        "Save each repo's HEAD to $HOME/task/head-<repo-directory-name>.txt.",
+        "In each repo write 'staged' without newline to .acceptance-state, git add ONLY that file, then replace its working-tree content with 'unstaged' without newline. Write 'untracked' without newline to .acceptance-untracked and leave it untracked.",
+        "If .acceptance-setup-count exists, assert it has exactly one line. Never run setup yourself.",
         `Write exactly '${nonce}' without a newline into $HOME/task/acceptance.txt and $HOME/agent/acceptance-${nonce}.txt.`,
         "Then complete this task successfully. Do not print credentials or modify unrelated files.",
       ].join("\n"),
     });
     await info.attach("task", { contentType: "application/json", body: Buffer.from(JSON.stringify({ profile: profile.id, ...issue })) });
     const base = folder("task", issue.id);
-    await pollUntil({ label: `${profile.id} completed run and durable task file`, deadlineAt: Date.now() + 840_000,
+    const cold = await pollUntil({ label: `${profile.id} completed run and durable task file`, deadlineAt: Date.now() + 840_000,
       intervalMs: 5_000,
       load: async () => ({ issue: await api.json<{ status: string }>(`/api/issues/${issue.id}`),
         saves: await api.json<WorkFolderSyncStatus[]>(`${base}/sync`) }),
@@ -92,5 +98,58 @@ for (const profile of stack.profiles) {
     });
     const content = await api.request(`${base}/content?path=acceptance.txt`);
     expect(content.status).toBe(200); expect(await content.text()).toBe(nonce);
+    const coldRunIds = new Set(cold.saves.map((save) => save.runId));
+    await api.json(`/api/issues/${issue.id}`, "PATCH", { status: "todo", description: [
+      "Continue this sandbox acceptance task. This is a warm run; inspect the existing work without repairing it.",
+      "Verify cwd equals HOME and all seven directories still exist.",
+      `Assert $HOME/task/acceptance.txt and every repo's committed HEAD:.acceptance-owner equal '${nonce}'.`,
+      "For each repo assert HEAD equals the saved task/head-<repo-directory-name>.txt, index :.acceptance-state equals 'staged', working .acceptance-state equals 'unstaged', and .acceptance-untracked equals 'untracked' and remains untracked.",
+      "If .acceptance-setup-count exists, assert exactly one line. Fail with the actual discrepancy; do not recreate missing state or rerun setup.",
+      `Write exactly '${nonce}' without a newline to $HOME/task/warm.txt, then complete the task.`,
+    ].join("\n") });
+    const warm = await pollUntil({ label: `${profile.id} warm run preserves saved work`, deadlineAt: Date.now() + 840_000,
+      intervalMs: 5_000,
+      load: async () => ({ issue: await api.json<{ status: string }>(`/api/issues/${issue.id}`),
+        saves: (await api.json<WorkFolderSyncStatus[]>(`${base}/sync`)).filter((save) => !coldRunIds.has(save.runId)) }),
+      accept: (state) => state.issue.status === "done" && state.saves.some((save) => !save.active && save.state === "saved" && save.lastSavedAt !== null),
+      reject: (state) => state.saves.some((save) => save.state === "failed") ? "Warm save failed"
+        : ["blocked", "cancelled"].includes(state.issue.status) ? `Warm task ended ${state.issue.status}` : undefined,
+    });
+    const warmContent = await api.request(`${base}/content?path=warm.txt`);
+    expect(warmContent.status).toBe(200); expect(await warmContent.text()).toBe(nonce);
+    await info.attach("cold-and-warm-checkpoints", { contentType: "application/json", body: Buffer.from(JSON.stringify({ cold: cold.saves, warm: warm.saves })) });
   });
 }
+
+test("saves during two real 180-second intervals and flushes the final edit", async ({}, info) => {
+  const profile = stack.profiles.find((entry) => entry.id === "legacy-codex")!;
+  const nonce = randomUUID();
+  const issue = await api.json<{ id: string; identifier: string }>(`/api/companies/${stack.companyId}/issues`, "POST", {
+    title: `Real checkpoint intervals ${nonce}`, projectId: stack.projectId, assigneeAgentId: profile.agentId, status: "todo",
+    description: [
+      "Run a real timed persistence acceptance test. Execute the following shell sequence and wait for it to finish, keeping this task in progress throughout both sleeps. Use a tool timeout of at least 420 seconds, or poll its session until it exits. Do not shorten either sleep or mark the task complete early.",
+      `printf '${nonce}:one' > "$HOME/task/interval.txt"; sleep 190; printf '${nonce}:two' > "$HOME/task/interval.txt"; sleep 190; printf '${nonce}:final' > "$HOME/task/interval.txt"`,
+      "After the command exits successfully, complete the task. Do not print credentials.",
+    ].join("\n"),
+  });
+  await info.attach("task", { contentType: "application/json", body: Buffer.from(JSON.stringify(issue)) });
+  const base = folder("task", issue.id);
+  const observations: Array<{ observedAt: string; phase: string; saves: WorkFolderSyncStatus[] }> = [];
+  for (const phase of ["one", "two", "final"]) {
+    const snapshot = await pollUntil({ label: `durable interval ${phase}`, deadlineAt: Date.now() + (phase === "one" ? 840_000 : 300_000), intervalMs: 3_000,
+      load: async () => {
+        const response = await api.request(`${base}/content?path=interval.txt`);
+        return { content: response.ok ? await response.text() : null, saves: await api.json<WorkFolderSyncStatus[]>(`${base}/sync`),
+          issue: await api.json<{ status: string }>(`/api/issues/${issue.id}`) };
+      },
+      accept: (state) => state.content === `${nonce}:${phase}` && state.saves.some((save) => save.state === "saved" && save.lastSavedAt !== null && save.active === (phase !== "final")),
+      reject: (state) => state.saves.some((save) => save.state === "failed") ? "Timed checkpoint failed"
+        : ["blocked", "cancelled"].includes(state.issue.status) ? `Timed task ended ${state.issue.status}` : undefined,
+    });
+    observations.push({ observedAt: new Date().toISOString(), phase, saves: snapshot.saves });
+  }
+  const first = observations[0]!.saves.find((save) => save.active)!;
+  const second = observations[1]!.saves.find((save) => save.runId === first.runId)!;
+  expect(Date.parse(second.lastSavedAt!) - Date.parse(first.lastSavedAt!)).toBeGreaterThanOrEqual(170_000);
+  await info.attach("real-checkpoint-intervals", { contentType: "application/json", body: Buffer.from(JSON.stringify(observations, null, 2)) });
+});
