@@ -2736,9 +2736,12 @@ it("cold-restores a suspended provider session under its durable run binding", a
       stateDirectory,
       "--include-skill-instructions",
       "--durable-turn-ids",
+      "-c",
+      'shell_environment_policy.set={PATH="/run/A"}',
     ),
     stateDirectory,
     environment: {
+      PAPERCLIP_GITHUB_BROKER_TOKEN: "test-run-A-capability",
       PAPERCLIP_PROVIDER_TRACE_PATH: tracePath,
       PAPERCLIP_PROVIDER_TRACE_MAX_BYTES: String(64 * 1024 * 1024),
     },
@@ -2811,6 +2814,8 @@ it("cold-restores a suspended provider session under its durable run binding", a
   };
   const rotated = createCapabilityRunnerdCodexTransport({
     ...options,
+    environment: { ...options.environment, PAPERCLIP_GITHUB_BROKER_TOKEN: "test-run-B-capability" },
+    codexArgs: options.codexArgs.map((arg) => arg.replace('/run/A', '/run/B')),
     resumeDynamicTools: dynamicTools,
     resumeCompletionContract: {
       revision: "contract-second",
@@ -2824,6 +2829,9 @@ it("cold-restores a suspended provider session under its durable run binding", a
   }));
   try {
     const read = await rotated.transport.request("thread/read", {});
+    const persistedProvider = JSON.parse(await readFile(join(stateDirectory, "runner", "codex-provider-state.json"), "utf8"));
+    expect(persistedProvider.config.args.join("\n")).toContain('/run/B');
+    expect(JSON.stringify(persistedProvider)).not.toContain("test-run-B-capability");
     expect(read.thread).toMatchObject({
       id: firstProviderThread.id,
       sessionId: firstProviderThread.sessionId,

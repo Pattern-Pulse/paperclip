@@ -114,6 +114,47 @@ describe("Codex security configuration", () => {
     expect(localAllowed.sort()).toEqual(["GITHUB_TOKEN", "PATH"]);
   });
 
+  it("isolates managed launcher profiles and never serializes broker capabilities or host API credentials", () => {
+    const serialized = createIsolatedCodexAppServerArgs({
+      HOME: "/isolated/provider", CODEX_HOME: "/isolated/provider",
+      PATH: "/runtime/run-B:/safe/bin",
+      PAPERCLIP_GITHUB_LAUNCHER_DIR: "/runtime/run-B",
+      PAPERCLIP_GITHUB_BROKER_TOKEN: "private-run-capability",
+      PAPERCLIP_GITHUB_BRIDGE_TOKEN: "private-bridge-capability",
+      PAPERCLIP_API_KEY: "forbidden-agent-token",
+      GH_CONFIG_DIR: "/runtime/run-B/gh-config",
+    }).join("\n");
+    expect(serialized).toContain('"/isolated/provider"="none"');
+    expect(serialized).toContain('"/runtime/run-B"="read"');
+    expect(serialized).toContain('"/runtime/run-B/gh-config"="write"');
+    expect(serialized).toContain('HOME="/runtime/run-B"');
+    expect(serialized).toContain('ZDOTDIR="/runtime/run-B"');
+    expect(serialized).toContain('BASH_ENV="/runtime/run-B/.bashrc"');
+    expect(serialized).toContain('"PAPERCLIP_GITHUB_BRIDGE_TOKEN"');
+    expect(serialized).not.toContain("PAPERCLIP_API_KEY");
+    expect(serialized).not.toContain("private-run-capability");
+    expect(serialized).not.toContain("private-bridge-capability");
+    expect(serialized).not.toContain("forbidden-agent-token");
+  });
+
+  it("keeps the sandbox home while loading managed GitHub shell profiles", () => {
+    const serialized = createIsolatedCodexAppServerArgs({
+      PAPERCLIP_RUNNER_EXTERNAL_SANDBOX: "1",
+      HOME: "/home/daytona",
+      PAPERCLIP_TASK_DIR: "/home/daytona/task",
+      PAPERCLIP_AGENT_DIR: "/home/daytona/agent",
+      PAPERCLIP_USER_DIR: "/home/daytona/user",
+      PAPERCLIP_PROJECT_DIR: "/home/daytona/project",
+      PAPERCLIP_REPOS_DIR: "/home/daytona/repos",
+      PAPERCLIP_PRIMARY_REPO: "/home/daytona/repos/project",
+      PAPERCLIP_GITHUB_LAUNCHER_DIR: "/runtime/run-B",
+    }).join("\n");
+    expect(serialized).toContain('HOME="/home/daytona"');
+    expect(serialized).not.toContain('HOME="/runtime/run-B"');
+    expect(serialized).toContain('ZDOTDIR="/runtime/run-B"');
+    expect(serialized).toContain('BASH_ENV="/runtime/run-B/.bashrc"');
+  });
+
   it("uses a read-only permission profile for plan mode", () => {
     expect(createSecuredCodexThreadParams("/workspace", "plan")).toMatchObject({
       cwd: "/workspace",

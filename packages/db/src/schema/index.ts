@@ -184,3 +184,4 @@ export { pluginJobs, pluginJobRuns } from "./plugin_jobs.js";
 export { pluginWebhookDeliveries } from "./plugin_webhooks.js";
 export { pluginLogs } from "./plugin_logs.js";
 export * from "./work_folders.js";
+export { runIdentityContexts } from "./run_identity_contexts.js";
