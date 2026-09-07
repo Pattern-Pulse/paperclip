@@ -6,10 +6,11 @@ import { eq } from "drizzle-orm";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { agents, assets, companyMemberships, issueAttachments, companies, createDb, heartbeatRuns, issues, environments, environmentLeases, projects, projectWorkspaces, taskRepositoryBindings, workFolderObjects, startEmbeddedPostgresTestDatabase, type Db } from "@paperclipai/db";
+import { agents, assets, companyMemberships, issueAttachments, companies, createDb, heartbeatRuns, issues, environments, environmentLeases, projects, projectWorkspaces, taskRepositoryBindings, workFolderObjects, workFolderRuns, startEmbeddedPostgresTestDatabase, type Db } from "@paperclipai/db";
 import { createLocalDiskStorageProvider } from "../storage/local-disk-provider.js";
 import { prepareSandboxWorkFolders } from "../services/sandbox-work-folders.js";
 import { retainUnsavedWorkFolderLease, workFolderSandboxKey } from "../services/work-folder-retention.js";
+import * as activityLog from "../services/activity-log.js";
 import { workFolderService } from "../services/work-folders.js";
 import { collectWorkFolderGarbage } from "../services/work-folder-garbage.js";
 import { localTestWorkFolderRunner } from "./helpers/work-folder-runner.js";
@@ -61,6 +62,20 @@ describe("shared sandbox work-folder lifecycle", () => {
         runner: { execute: (input) => localTestWorkFolderRunner.execute({ ...input, env: { ...input.env, HOME: home } }) } } });
     active.push(run); return run;
   }
+  it("keeps successful checkpoints saved when activity logging fails", async () => {
+    const activity = vi.spyOn(activityLog, "logActivity").mockRejectedValue(new Error("activity unavailable"));
+    try {
+      const run = await prepare(path.join(root, "activity-failure"), randomUUID());
+      await fs.writeFile(path.join(run.home, "task/activity-proof.txt"), "saved despite logging failure");
+      await run.stop(); active.splice(active.indexOf(run), 1);
+      const [state] = await db.select().from(workFolderRuns).where(eq(workFolderRuns.runId, run.manifest.runId));
+      expect(state?.state).toBe("saved");
+      expect(state?.lastSavedAt).not.toBeNull();
+      const folder = await workFolderService(db, storage).ensure({ companyId, scope: "task", ownerId: taskId });
+      expect((await workFolderService(db, storage).list(folder)).files.some((file) => file.path === "activity-proof.txt")).toBe(true);
+    } finally { activity.mockRestore(); }
+  }, 120_000);
+
   it("reuses clones and restores saved unpushed work, staged changes, and task files after losing the sandbox", async () => {
     const home = path.join(root, "sandbox");
     const leaseId = randomUUID();
