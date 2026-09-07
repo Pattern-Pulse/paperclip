@@ -3697,10 +3697,11 @@ async function executePaperclipNativeSessionWithinScope(
   }
   if (
     input.execution.provider.kind === "acpx" &&
-    input.execution.provider.agent === "pi"
+    input.execution.provider.agent === "pi" &&
+    !input.useRunnerd
   ) {
     throw new Error(
-      "paperclip_runner_provider_unsupported: ACPX Pi is unavailable until descriptor-confined verified launch is implemented",
+      "paperclip_runner_provider_unsupported: ACPX Pi requires the native runner's descriptor-confined verified launch",
     );
   }
   const earliestPreparationStart = input.preparationSpans?.reduce(

@@ -3902,7 +3902,7 @@ describe("native process ownership", () => {
     },
   );
 
-  it("rejects ACPX Pi before constructing a backend", async () => {
+  it("rejects ACPX Pi without the verified runner before constructing a backend", async () => {
     const piExecution = {
       ...execution,
       binding: { ...execution.binding, runId: "run-acpx-pi-rejected" },
@@ -3941,6 +3941,35 @@ describe("runnerd provider runtime wiring", () => {
       process.env.PAPERCLIP_RUNNER_STATE_DIR = previousStateDirectory;
     }
     await rm(isolatedStateDirectory, { recursive: true, force: true });
+  });
+
+  it("admits ACPX Pi through the production verified-runner entry point", async () => {
+    const piExecution = {
+      ...execution,
+      binding: { ...execution.binding, runId: "run-acpx-pi-verified" },
+      provider: { kind: "acpx", agent: "pi", model: "openrouter/deepseek/deepseek-v4-flash-0731", permissionMode: "approve-all" },
+      session: { ...execution.session, normalizedSessionId: "verified-pi-session", driverKind: "acpx_runtime" },
+    } as unknown as NativeExecutionInputV1;
+    state.createBackend.mockClear();
+    state.createTransport.mockClear();
+    state.execute.mockReset().mockResolvedValue({
+      result: { summary: "completed" }, terminal: { runTerminalState: "succeeded" },
+      turnId: "turn", normalizedSessionId: "verified-pi-session", providerSessionId: null,
+      driverKind: "acpx_runtime", driverVersion: "1", nativeEventCount: 1,
+      highestContiguousSourceSeq: 1,
+    });
+    await executePaperclipNativeSession({
+      db: leaseDb(piExecution), execution: piExecution,
+      runnerInstanceId: "verified-pi-runner", useRunnerd: true,
+    });
+    expect(state.createBackend).toHaveBeenCalledWith(piExecution, expect.objectContaining({
+      codexTransportFactory: expect.any(Function),
+    }));
+    state.createBackend.mock.calls[0]![1].codexTransportFactory!();
+    expect(state.createTransport).toHaveBeenCalledWith(expect.objectContaining({
+      provider: "acpx", acpxAgent: "pi",
+    }));
+    expect(state.execute).toHaveBeenCalledOnce();
   });
 
   it("passes the run checkpoint active turn into restart recovery", async () => {
