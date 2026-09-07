@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
@@ -59,13 +59,35 @@ describe("shared sandbox work-folder lifecycle", () => {
     const input = { companyId, issueId: task, runId, agentId, workspaceId };
     await bindWarmSandboxWorkspace(db, input);
     const [bound] = await db.select().from(issues).where(eq(issues.id, task));
-    expect(bound).toMatchObject({ executionWorkspaceId: workspaceId, executionWorkspacePreference: "reuse_existing", executionWorkspaceSettings: null });
+    expect(bound).toMatchObject({ executionWorkspaceId: workspaceId, executionWorkspacePreference: "reuse_existing", executionWorkspaceSettings: { mode: "shared_workspace" } });
     for (const bad of [{ companyId: randomUUID() }, { agentId: randomUUID() }, { issueId: taskId }, { runId: randomUUID() }]) {
       await expect(bindWarmSandboxWorkspace(db, { ...input, ...bad })).rejects.toThrow("active task run");
     }
     await db.update(executionWorkspaces).set({ sourceIssueId: taskId }).where(eq(executionWorkspaces.id, workspaceId));
     await expect(bindWarmSandboxWorkspace(db, input)).rejects.toThrow("active task run");
     await db.update(executionWorkspaces).set({ sourceIssueId: task }).where(eq(executionWorkspaces.id, workspaceId));
+    const originalLogActivity = activityLog.logActivity;
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const reached = new Promise<void>((resolve) => { entered = resolve; });
+    const audit = vi.spyOn(activityLog, "logActivity").mockImplementationOnce(async (...args) => {
+      entered(); await gate; return originalLogActivity(...args);
+    });
+    const pendingBinding = bindWarmSandboxWorkspace(db, input);
+    try {
+      await reached;
+      // These state changes must wait until the validated binding commits.
+      for (const target of ["run", "workspace"]) {
+        await expect(db.transaction(async (tx) => {
+          await tx.execute(sql`set local lock_timeout = '100ms'`);
+          if (target === "run") await tx.update(heartbeatRuns).set({ status: "succeeded" }).where(eq(heartbeatRuns.id, runId));
+          else await tx.update(executionWorkspaces).set({ status: "closed" }).where(eq(executionWorkspaces.id, workspaceId));
+        })).rejects.toMatchObject({ cause: { code: "55P03" } });
+      }
+    } finally {
+      release(); await pendingBinding; audit.mockRestore();
+    }
     await db.update(heartbeatRuns).set({ status: "succeeded" }).where(eq(heartbeatRuns.id, runId));
     await expect(bindWarmSandboxWorkspace(db, input)).rejects.toThrow("active task run");
   });

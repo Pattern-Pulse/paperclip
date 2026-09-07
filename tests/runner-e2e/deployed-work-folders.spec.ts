@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto";
 import { test, expect } from "@playwright/test";
 import type { EnvironmentCapabilities } from "../../packages/shared/src/environment-support.js";
 import type { SandboxWorkFolderManifest, WorkFolderListing, WorkFolderSyncStatus } from "../../packages/shared/src/work-folders.js";
-import { QUALIFIED_ACPX_PROFILES } from "../../packages/paperclip-runner/src/drivers/acpx/qualified-profiles.js";
+import { QUALIFIED_ACPX_RUNNER_MODELS } from "../../server/src/services/native-runtime/provider-profile.js";
 import { pollUntil } from "./api.js";
 import { DeployedStackApi, deployedAgentEngine, loadDeployedStack } from "./deployed-stack.js";
+
+import { repoAcceptancePrompt } from "./work-folder-acceptance-prompts.js";
 
 const stack = loadDeployedStack();
 const api = new DeployedStackApi(stack);
@@ -26,7 +28,7 @@ test("deployed candidate and complete supported adapter inventory", async ({}, i
     if (capabilities.adapters.find((entry) => entry.adapterType === adapter.type)?.drivers.sandbox !== "supported") continue;
     if (adapter.type === "paperclip_runner") {
       required.push("paperclip_runner:codex", "paperclip_runner:opencode",
-        ...Object.keys(QUALIFIED_ACPX_PROFILES).map((name) => `paperclip_runner:acpx:${name}`));
+        ...Object.keys(QUALIFIED_ACPX_RUNNER_MODELS).map((name) => `paperclip_runner:acpx:${name}`));
     } else {
       required.push(`${adapter.type}:cli`);
       if (adapter.capabilities.supportsAcp) required.push(`${adapter.type}:acp`);
@@ -69,6 +71,7 @@ for (const [scope, owner] of [["task", stack.taskId], ["agent", stack.agentId], 
   });
 }
 
+
 for (const profile of stack.profiles) {
   test(`${profile.id} preserves task-specific repo and file state across cold and warm runs`, async ({}, info) => {
     test.setTimeout(1_800_000);
@@ -76,19 +79,7 @@ for (const profile of stack.profiles) {
     const issue = await api.json<{ id: string; identifier: string }>(`/api/companies/${stack.companyId}/issues`, "POST", {
       title: `Work folder acceptance ${profile.id} ${nonce}`, projectId: stack.projectId,
       assigneeAgentId: profile.agentId, status: "todo",
-      description: [
-        "Perform this sandbox acceptance task using real filesystem tools.",
-        "Verify cwd equals the operating-system HOME and task, agent, user, project, repos, .codex, .cache are directories beneath it.",
-        "Verify repos contains at least two independent Git checkouts. Fail the task with the actual error if either assertion fails.",
-        "In each repo, assert .acceptance-owner does not exist (another task must not share this checkout).",
-        `In each repo write '${nonce}' without a newline to .acceptance-owner, git add ONLY that file, and create a local commit using git -c user.name=Acceptance -c user.email=acceptance@example.invalid commit -m acceptance. Do not push.`,
-        "Save each repo's HEAD to $HOME/task/head-<repo-directory-name>.txt.",
-        "In each repo write 'staged' without newline to .acceptance-state, git add ONLY that file, then replace its working-tree content with 'unstaged' without newline. Write 'untracked' without newline to .acceptance-untracked and leave it untracked.",
-        "If .acceptance-setup-count exists, assert it has exactly one line. Never run setup yourself.",
-        `Write exactly '${nonce}' without a newline into $HOME/task/acceptance.txt and $HOME/agent/acceptance-${nonce}.txt.`,
-        `Also write exactly '${nonce}' to $HOME/.cache/warm-${nonce}; this disposable cache marker must survive an actual warm reuse.`,
-        "Then complete this task successfully. Do not print credentials or modify unrelated files.",
-      ].join("\n"),
+      description: repoAcceptancePrompt(nonce, false),
     });
     await info.attach("task", { contentType: "application/json", body: Buffer.from(JSON.stringify({ profile: profile.id, ...issue })) });
     const base = folder("task", issue.id);
@@ -107,15 +98,7 @@ for (const profile of stack.profiles) {
     const coldRun = await api.json<{ contextSnapshot: { paperclipWorkFolders: SandboxWorkFolderManifest } }>(`/api/heartbeat-runs/${coldSave.runId}`);
     const coldManifest = coldRun.contextSnapshot.paperclipWorkFolders;
     expect(coldManifest.sandboxKey).toBeTruthy();
-    await api.json(`/api/issues/${issue.id}`, "PATCH", { status: "todo", description: [
-      "Continue this sandbox acceptance task. This is a warm run; inspect the existing work without repairing it.",
-      "Verify cwd equals HOME and all seven directories still exist.",
-      `Assert $HOME/task/acceptance.txt and every repo's committed HEAD:.acceptance-owner equal '${nonce}'.`,
-      `Assert $HOME/.cache/warm-${nonce} still contains exactly '${nonce}'. A replacement is not a warm pass; do not recreate the marker.`,
-      "For each repo assert HEAD equals the saved task/head-<repo-directory-name>.txt, index :.acceptance-state equals 'staged', working .acceptance-state equals 'unstaged', and .acceptance-untracked equals 'untracked' and remains untracked.",
-      "If .acceptance-setup-count exists, assert exactly one line. Fail with the actual discrepancy; do not recreate missing state or rerun setup.",
-      `Write exactly '${nonce}' without a newline to $HOME/task/warm.txt, then complete the task.`,
-    ].join("\n") });
+    await api.json(`/api/issues/${issue.id}`, "PATCH", { status: "todo", description: repoAcceptancePrompt(nonce, true) });
     const warm = await pollUntil({ label: `${profile.id} warm run preserves saved work`, deadlineAt: Date.now() + 840_000,
       intervalMs: 5_000,
       load: async () => ({ issue: await api.json<{ status: string }>(`/api/issues/${issue.id}`),
