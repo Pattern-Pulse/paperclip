@@ -27,6 +27,7 @@ export interface WorkFolderListing {
   owner: WorkFolderOwner;
   files: WorkFile[];
   nextCursor: string | null;
+  lastSavedAt: string | null;
 }
 
 export interface WorkFolderSyncStatus {

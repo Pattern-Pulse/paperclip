@@ -8,14 +8,16 @@ export const workFoldersApi = {
   async list(owner: WorkFolderOwner, trash = false) {
     const files: WorkFile[] = [];
     let cursor: string | null = null;
+    let lastSavedAt: string | null = null;
     do {
       const query = new URLSearchParams({ trash: String(trash), limit: "1000", ...(cursor ? { cursor } : {}) });
       const page: WorkFolderListing = await api.get(`${base(owner)}?${query}`);
       files.push(...page.files);
+      if (page.lastSavedAt && (!lastSavedAt || page.lastSavedAt > lastSavedAt)) lastSavedAt = page.lastSavedAt;
       cursor = page.nextCursor;
     } while (cursor && files.length < 100_000);
     if (cursor) throw new Error("This folder is too large to display in one view");
-    return files;
+    return { files, lastSavedAt };
   },
   upload: (owner: WorkFolderOwner, file: File, filePath: string, operationId: string) =>
     api.putRaw(`${base(owner)}/content?${new URLSearchParams({ path: filePath })}`, file,

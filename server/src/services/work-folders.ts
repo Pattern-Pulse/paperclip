@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { and, asc, eq, gt, isNull, isNotNull, sql } from "drizzle-orm";
+import { and, asc, eq, gt, isNull, isNotNull, max, sql } from "drizzle-orm";
 import { workFolders, workFiles, workFileOperations, workFolderObjects, type Db } from "@paperclipai/db";
 import { validateWorkFilePath, type WorkFile, type WorkFolderOwner } from "@paperclipai/shared";
 import { registerWorkFolderObject } from "./work-folder-garbage.js";
@@ -41,7 +41,10 @@ export function workFolderService(db: Db, storage: StorageProvider) {
     const rows = await db.select().from(workFiles).where(and(eq(workFiles.folderId, folder.id),
       eq(workFiles.companyId, folder.companyId), options.trash ? isNotNull(workFiles.deletedAt) : isNull(workFiles.deletedAt),
       options.cursor ? gt(workFiles.id, options.cursor) : undefined)).orderBy(asc(workFiles.id)).limit(limit + 1);
+    const [saved] = await db.select({ at: max(workFileOperations.createdAt) }).from(workFileOperations)
+      .where(and(eq(workFileOperations.companyId, folder.companyId), eq(workFileOperations.folderId, folder.id)));
     return { id: folder.id, owner: { companyId: folder.companyId, scope: folder.scope, ownerId: folder.ownerId },
+      lastSavedAt: saved?.at?.toISOString() ?? null,
       files: rows.slice(0, limit).map(workFileDto), nextCursor: rows.length > limit ? rows[limit - 1]!.id : null };
   }
 

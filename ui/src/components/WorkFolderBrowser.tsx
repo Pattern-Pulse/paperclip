@@ -53,7 +53,7 @@ export function WorkFolderBrowser({ owner, exampleFiles }: { owner: WorkFolderOw
   const filesQuery = useQuery({ queryKey: [...key, "files", trash], queryFn: () => workFoldersApi.list(owner, trash),
     enabled: !exampleFiles, refetchInterval: 15_000, retry: false });
   const syncQuery = useQuery({ queryKey: [...key, "sync"], queryFn: () => workFoldersApi.sync(owner), enabled: !exampleFiles, refetchInterval: 5000, retry: false });
-  const files = exampleFiles ?? filesQuery.data ?? [];
+  const files = exampleFiles ?? filesQuery.data?.files ?? [];
   const selected = files.find((file) => file.path === selectedPath);
   const nodes = useMemo(() => tree(files), [files]);
   const preview = useQuery({ queryKey: [...key, "preview", selected?.path, selected?.sha256],
@@ -71,7 +71,8 @@ export function WorkFolderBrowser({ owner, exampleFiles }: { owner: WorkFolderOw
   const statuses = syncQuery.data ?? [];
   const failed = statuses.find((status) => status.state === "failed");
   const saving = mutation.isPending || statuses.some((status) => status.state === "saving");
-  const lastSaved = statuses.map((status) => status.lastSavedAt).filter((value): value is string => Boolean(value)).sort().at(-1);
+  const lastSaved = [...statuses.map((status) => status.lastSavedAt), filesQuery.data?.lastSavedAt]
+    .filter((value): value is string => Boolean(value)).sort().at(-1);
   const disabled = mutation.isPending || Boolean(exampleFiles);
   return <div className="flex min-h-0 flex-col gap-3">
     <div className="flex flex-wrap items-center gap-2">
