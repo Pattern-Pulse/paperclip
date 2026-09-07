@@ -9,7 +9,10 @@ import { DeployedStackApi, loadDeployedStack } from "./deployed-stack.js";
 const stack = loadDeployedStack();
 const api = new DeployedStackApi(stack);
 const folder = (scope: string, ownerId: string) => `/api/companies/${stack.companyId}/work-folders/${scope}/${encodeURIComponent(ownerId)}`;
-test.describe.configure({ mode: "serial" });
+test.beforeAll(async () => {
+  const health = await api.json<{ commit: string }>("/api/health");
+  expect(health.commit, "Only exercise the declared deployed candidate").toBe(stack.commit);
+});
 
 test("deployed candidate and complete supported adapter inventory", async ({}, info) => {
   const health = await api.json<{ commit: string }>("/api/health");
@@ -77,16 +80,17 @@ for (const profile of stack.profiles) {
         "Then complete this task successfully. Do not print credentials or modify unrelated files.",
       ].join("\n"),
     });
+    await info.attach("task", { contentType: "application/json", body: Buffer.from(JSON.stringify({ profile: profile.id, ...issue })) });
     const base = folder("task", issue.id);
     await pollUntil({ label: `${profile.id} completed run and durable task file`, deadlineAt: Date.now() + 840_000,
       intervalMs: 5_000,
       load: async () => ({ issue: await api.json<{ status: string }>(`/api/issues/${issue.id}`),
         saves: await api.json<WorkFolderSyncStatus[]>(`${base}/sync`) }),
       accept: (state) => state.issue.status === "done" && state.saves.some((save) => !save.active && save.state === "saved" && save.lastSavedAt !== null),
-      reject: (state) => state.saves.some((save) => save.state === "failed") ? "Work-folder save failed" : undefined,
+      reject: (state) => state.saves.some((save) => save.state === "failed") ? "Work-folder save failed"
+        : state.issue.status === "blocked" || state.issue.status === "cancelled" ? `Task ${issue.identifier} ended ${state.issue.status}` : undefined,
     });
     const content = await api.request(`${base}/content?path=acceptance.txt`);
     expect(content.status).toBe(200); expect(await content.text()).toBe(nonce);
-    await info.attach("task", { contentType: "application/json", body: Buffer.from(JSON.stringify({ profile: profile.id, ...issue })) });
   });
 }

@@ -16,6 +16,7 @@ import { workFolderRepositoryService } from "./work-folder-repositories.js";
 import { startWorkFolderCheckpointer } from "./work-folder-checkpointer.js";
 import { logActivity } from "./activity-log.js";
 import { assertWorkFolderAccess } from "./work-folder-access.js";
+import { logger } from "../middleware/logger.js";
 
 function signature(entry: WorkTreeEntry | undefined) {
   return entry ? JSON.stringify([entry.kind, entry.sha256, entry.executable]) : "missing";
@@ -284,7 +285,8 @@ export async function prepareSandboxWorkFolders(input: {
     await logActivity(db, { companyId: input.companyId, actorType: "agent", actorId: input.agentId,
       agentId: input.agentId, runId: input.runId, issueId: input.taskId,
       responsibleUserIdOverride: input.responsibleUserId, action, entityType: "heartbeat_run", entityId: input.runId,
-      details: { scopes: WORK_FOLDER_SCOPES.filter((scope) => Boolean(folders[scope])), repositories: bindings.length } });
+      details: { scopes: WORK_FOLDER_SCOPES.filter((scope) => Boolean(folders[scope])), repositories: bindings.length } })
+      .catch((error) => logger.warn({ err: error, runId: input.runId }, "Work-folder activity could not be recorded"));
   }
   try {
     await seedAttachments();
