@@ -40,7 +40,8 @@ describe("shared sandbox work-folder lifecycle", () => {
       await fs.symlink("tracked", path.join(source, "link"));
       await exec("git", ["-C", source, "add", "."]);
       await exec("git", ["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"]);
-      await db.insert(projectWorkspaces).values({ companyId, projectId, name, repoUrl: source, sourceType: "git_repo", isPrimary: name === "repo-one" });
+      await db.insert(projectWorkspaces).values({ companyId, projectId, name, repoUrl: source, sourceType: "git_repo", isPrimary: name === "repo-one",
+        setupCommand: "printf 'initialized\\n' >> .setup-count" });
     }
   }, 60_000);
   afterAll(async () => {
@@ -62,18 +63,27 @@ describe("shared sandbox work-folder lifecycle", () => {
         runner: { execute: (input) => localTestWorkFolderRunner.execute({ ...input, env: { ...input.env, HOME: home } }) } } });
     active.push(run); return run;
   }
-  it("keeps successful checkpoints saved when activity logging fails", async () => {
+  it("retains unaudited edits and retries without misreporting a completed checkpoint", async () => {
+    const run = await prepare(path.join(root, "activity-failure"), randomUUID());
+    await run.flush();
+    const [before] = await db.select().from(workFolderRuns).where(eq(workFolderRuns.runId, run.manifest.runId));
+    await fs.writeFile(path.join(run.home, "task/activity-proof.txt"), "saved after logging recovers");
     const activity = vi.spyOn(activityLog, "logActivity").mockRejectedValue(new Error("activity unavailable"));
     try {
-      const run = await prepare(path.join(root, "activity-failure"), randomUUID());
-      await fs.writeFile(path.join(run.home, "task/activity-proof.txt"), "saved despite logging failure");
-      await run.stop(); active.splice(active.indexOf(run), 1);
+      await expect(run.stop()).rejects.toThrow("activity unavailable");
       const [state] = await db.select().from(workFolderRuns).where(eq(workFolderRuns.runId, run.manifest.runId));
-      expect(state?.state).toBe("saved");
-      expect(state?.lastSavedAt).not.toBeNull();
+      expect(state?.state).toBe("failed");
+      expect(state?.lastSavedAt).toEqual(before?.lastSavedAt);
       const folder = await workFolderService(db, storage).ensure({ companyId, scope: "task", ownerId: taskId });
-      expect((await workFolderService(db, storage).list(folder)).files.some((file) => file.path === "activity-proof.txt")).toBe(true);
+      expect((await workFolderService(db, storage).list(folder)).files.some((file) => file.path === "activity-proof.txt")).toBe(false);
+      expect(await fs.readFile(path.join(run.home, "task/activity-proof.txt"), "utf8")).toBe("saved after logging recovers");
     } finally { activity.mockRestore(); }
+    await run.stop(); active.splice(active.indexOf(run), 1);
+    const [saved] = await db.select().from(workFolderRuns).where(eq(workFolderRuns.runId, run.manifest.runId));
+    expect(saved?.state).toBe("saved");
+    expect(saved!.lastSavedAt!.getTime()).toBeGreaterThan(before!.lastSavedAt!.getTime());
+    const folder = await workFolderService(db, storage).ensure({ companyId, scope: "task", ownerId: taskId });
+    expect((await workFolderService(db, storage).list(folder)).files.some((file) => file.path === "activity-proof.txt")).toBe(true);
   }, 120_000);
 
   it("reuses clones and restores saved unpushed work, staged changes, and task files after losing the sandbox", async () => {
@@ -85,6 +95,7 @@ describe("shared sandbox work-folder lifecycle", () => {
     expect(first.primaryRepo).toBe(path.join(home, "repos/repo-one"));
     await fs.writeFile(path.join(home, "task/report.md"), "durable task file");
     const repo = first.primaryRepo;
+    expect(await fs.readFile(path.join(repo, ".setup-count"), "utf8")).toBe("initialized\n");
     await fs.writeFile(path.join(repo, "tracked"), "committed\n");
     await exec("git", ["-C", repo, "add", "."]);
     await exec("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "unpushed"]);
@@ -95,10 +106,12 @@ describe("shared sandbox work-folder lifecycle", () => {
     await fs.writeFile(path.join(repo, "untracked"), "untracked\n");
     await first.stop(); active.splice(active.indexOf(first), 1);
     const warm = await prepare(home, randomUUID(), leaseId);
+    expect(await fs.readFile(path.join(repo, ".setup-count"), "utf8")).toBe("initialized\n");
     expect(await fs.readFile(path.join(repo, "tracked"), "utf8")).toBe("unstaged\n");
     await warm.stop(); active.splice(active.indexOf(warm), 1);
     await fs.rm(home, { recursive: true });
     const restored = await prepare(path.join(root, "replacement"), randomUUID());
+    expect(await fs.readFile(path.join(restored.primaryRepo, ".setup-count"), "utf8")).toBe("initialized\n");
     expect(await fs.readFile(path.join(restored.home, "task/report.md"), "utf8")).toBe("durable task file");
     expect((await exec("git", ["-C", restored.primaryRepo, "rev-parse", "HEAD"])).stdout.trim()).toBe(expectedHead);
     expect((await exec("git", ["-C", restored.primaryRepo, "show", ":tracked"])).stdout).toBe("staged\n");

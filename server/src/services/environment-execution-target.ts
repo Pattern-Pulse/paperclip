@@ -4,6 +4,7 @@ import { adapterSupportsRemoteManagedEnvironments } from "@paperclipai/shared";
 import {
   adapterExecutionTargetToRemoteSpec,
   type AdapterExecutionTarget,
+  type AdapterSandboxExecutionTarget,
   type SandboxLeaseAcquisition,
 } from "@paperclipai/adapter-utils/execution-target";
 import type { DuplexObservabilityRecorder } from "@paperclipai/adapter-utils/duplex-observability";
@@ -359,7 +360,13 @@ export async function resolveEnvironmentExecutionTarget(input: {
       }
     }
 
-    return {
+    // The coordinator binds the natural home after acquiring this target. Read
+    // that host-owned binding at sync time instead of capturing the old cwd.
+    // Provider path/symlink confinement still applies to every transfer.
+    const syncLease = () => target.workFolderHome
+      ? { ...input.lease!, metadata: { ...input.lease!.metadata, remoteCwd: target.workFolderHome } }
+      : input.lease!;
+    const target: AdapterSandboxExecutionTarget = {
       kind: "remote",
       transport: "sandbox",
       providerKey: parsed.config.provider,
@@ -595,13 +602,13 @@ export async function resolveEnvironmentExecutionTarget(input: {
                   syncIn: (operations) =>
                     input.environmentRuntime!.syncIn({
                       environment: input.environment as Environment,
-                      lease: input.lease!,
+                      lease: syncLease(),
                       operations,
                     }),
                   syncOut: (operations) =>
                     input.environmentRuntime!.syncOut({
                       environment: input.environment as Environment,
-                      lease: input.lease!,
+                      lease: syncLease(),
                       operations,
                     }),
                 }
@@ -625,6 +632,7 @@ export async function resolveEnvironmentExecutionTarget(input: {
           }
         : undefined,
     };
+    return target;
   }
 
   if (

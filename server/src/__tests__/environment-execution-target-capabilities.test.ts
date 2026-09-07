@@ -83,14 +83,14 @@ async function buildSandboxTarget(input: {
     environment: { id: "env-1", driver: "sandbox", config: { provider: "daytona" } },
     leaseId: "lease-1",
     leaseMetadata: { remoteCwd: "/work" },
-    lease: { id: "lease-1", leasePolicy: "reuse_by_environment" } as never,
+    lease: { id: "lease-1", leasePolicy: "reuse_by_environment", metadata: { remoteCwd: "/work", marker: "preserved" } } as never,
     environmentRuntime,
   });
 
   if (target?.kind !== "remote" || target.transport !== "sandbox") {
     throw new Error("expected a sandbox target");
   }
-  return { target, execute };
+  return { target, execute, environmentRuntime };
 }
 
 describe("resolveEnvironmentExecutionTarget effective capability snapshot", () => {
@@ -266,6 +266,23 @@ describe("effective snapshot gates the sync decision", () => {
     const { target } = await buildSandboxTarget({ snapshot: FULL_GRANT, supportsSync: true });
     expect(target.runner?.syncIn).toBeTypeOf("function");
     expect(target.runner?.syncOut).toBeTypeOf("function");
+  });
+
+  it("uses the host-bound home for sync after work folders are prepared without changing the primary workspace", async () => {
+    const { target, environmentRuntime } = await buildSandboxTarget({ snapshot: FULL_GRANT, supportsSync: true });
+    await target.runner!.syncOut!([]);
+    expect(environmentRuntime.syncOut).toHaveBeenLastCalledWith(expect.objectContaining({
+      lease: expect.objectContaining({ metadata: { remoteCwd: "/work", marker: "preserved" } }),
+    }));
+    target.workFolderHome = "/home/daytona";
+    await target.runner!.syncIn!([]);
+    await target.runner!.syncOut!([]);
+    for (const sync of [environmentRuntime.syncIn, environmentRuntime.syncOut]) {
+      expect(sync).toHaveBeenLastCalledWith(expect.objectContaining({
+        lease: expect.objectContaining({ metadata: { remoteCwd: "/home/daytona", marker: "preserved" } }),
+      }));
+    }
+    expect(target.remoteCwd).toBe("/work");
   });
 
   it("omits the native sync hooks when the snapshot removes a sync verb", async () => {

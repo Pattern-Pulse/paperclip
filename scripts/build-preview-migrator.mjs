@@ -17,12 +17,19 @@ export function previewIdentity(sha, date, artifactBaseUrl) {
     baseUrl: `${base.href.replace(/\/$/, "")}/${sha}` };
 }
 
+export function assertPreviewSourceClean(repo) {
+  // Repository policy regenerates the lock in CI for manifest-only branches.
+  // That generated input is allowed; every tracked source input must still
+  // match the commit identifying both the app image and migrator artifact.
+  execFileSync("git", ["diff", "--quiet", "HEAD", "--", ".", ":(exclude)pnpm-lock.yaml"], { cwd: repo });
+}
+
 export function buildPreviewMigrator(outputDirectory, artifactBaseUrl) {
   const repo = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
   const git = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
   const sha = git("rev-parse", "HEAD");
   if (process.env.GITHUB_SHA && process.env.GITHUB_SHA !== sha) throw new Error("Preview checkout differs from the workflow commit");
-  git("diff", "--quiet", "HEAD");
+  assertPreviewSourceClean(repo);
   const identity = previewIdentity(sha, new Date(git("show", "-s", "--format=%cI", "HEAD")), artifactBaseUrl);
   execFileSync("pnpm", ["--filter", "@paperclipai/db...", "build"], { cwd: repo, stdio: "inherit" });
   const output = path.resolve(outputDirectory);
