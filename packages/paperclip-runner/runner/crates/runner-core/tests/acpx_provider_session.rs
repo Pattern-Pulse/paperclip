@@ -91,8 +91,8 @@ fn bootstraps_a_codex_session_and_confirms_run_identity() {
 #[test]
 fn validates_qualified_policy_and_tool_catalog_before_spawning() {
     let mut invalid_agent = config("bootstrap");
-    invalid_agent.agent = "pi".to_owned();
-    assert!(start_error(&invalid_agent).contains("claude or codex"));
+    invalid_agent.agent = "unqualified".to_owned();
+    assert!(start_error(&invalid_agent).contains("claude, codex, or pi"));
 
     let mut unpinned = config("bootstrap");
     unpinned.permission_mode_pinned = false;
@@ -111,7 +111,11 @@ fn validates_qualified_policy_and_tool_catalog_before_spawning() {
 
 #[test]
 fn admits_each_exact_qualified_agent_model_pair() {
-    for (agent, model) in [("codex", "gpt-5.6-sol"), ("claude", "claude-sonnet-5")] {
+    for (agent, model) in [
+        ("codex", "gpt-5.6-sol"),
+        ("claude", "claude-sonnet-5"),
+        ("pi", "openrouter/deepseek/deepseek-v4-flash-0731"),
+    ] {
         let mut qualified = config("bootstrap");
         qualified.agent = agent.to_owned();
         qualified.model = model.to_owned();
