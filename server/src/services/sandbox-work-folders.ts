@@ -16,7 +16,6 @@ import { workFolderRepositoryService } from "./work-folder-repositories.js";
 import { startWorkFolderCheckpointer } from "./work-folder-checkpointer.js";
 import { logActivity } from "./activity-log.js";
 import { assertWorkFolderAccess } from "./work-folder-access.js";
-import { logger } from "../middleware/logger.js";
 
 function signature(entry: WorkTreeEntry | undefined) {
   return entry ? JSON.stringify([entry.kind, entry.sha256, entry.executable]) : "missing";
@@ -228,12 +227,14 @@ export async function prepareSandboxWorkFolders(input: {
       const root = path.posix.join(paths.repos!, binding.name);
       const probe = await target.runner!.execute({ command: "git", args: ["-C", root, "rev-parse", "--git-dir"], bypassSession: true, timeoutMs: 10_000 });
       const freshCheckout = probe.exitCode !== 0;
+      let restoredCheckout = false;
       if (freshCheckout) {
         // Publish the checkout directory only after every restore object or
         // clone step completes. An interrupted attempt cannot masquerade as a
         // reusable checkout merely because it contains a .git directory.
         const temporary = path.posix.join(staging, `repo-${binding.id}-${randomUUID()}`);
         const restored = await repositories.restore(binding, temporary, staging);
+        restoredCheckout = restored;
         if (!restored) {
           const auth = await resolveGitAuth(workspace.repoUrl!);
           const result = await target.runner!.execute({ command: "git", args: [...(auth?.configArgs ?? []), "clone", "--no-hardlinks",
@@ -264,7 +265,9 @@ export async function prepareSandboxWorkFolders(input: {
         }
         await transport.moveRoot(temporary, root);
       }
-      if ((!binding.setupComplete || freshCheckout) && workspace.setupCommand) {
+      // A complete checkpoint already contains the setup's durable outputs.
+      // Replacing the sandbox must not repeat completed project setup.
+      if ((!binding.setupComplete || (freshCheckout && !restoredCheckout)) && workspace.setupCommand) {
         const setup = await target.runner!.execute({ command: "sh", args: ["-c", workspace.setupCommand], cwd: root, bypassSession: true, timeoutMs: 300_000 });
         if (setup.exitCode !== 0 || setup.timedOut) throw new Error(`Repository ${binding.name} setup failed`);
       }
@@ -285,17 +288,19 @@ export async function prepareSandboxWorkFolders(input: {
     await logActivity(db, { companyId: input.companyId, actorType: "agent", actorId: input.agentId,
       agentId: input.agentId, runId: input.runId, issueId: input.taskId,
       responsibleUserIdOverride: input.responsibleUserId, action, entityType: "heartbeat_run", entityId: input.runId,
-      details: { scopes: WORK_FOLDER_SCOPES.filter((scope) => Boolean(folders[scope])), repositories: bindings.length } })
-      .catch((error) => logger.warn({ err: error, runId: input.runId }, "Work-folder activity could not be recorded"));
+      details: { phase: "started", scopes: WORK_FOLDER_SCOPES.filter((scope) => Boolean(folders[scope])), repositories: bindings.length } });
   }
   try {
+    // Record intent before mutations. An unavailable audit store blocks new
+    // work instead of turning an already completed save into a false failure.
+    // The run's persisted state/lastSavedAt records checkpoint completion.
+    await recordCheckpoint("work_folder.prepared");
     await seedAttachments();
     await importAgentFiles();
     // A resumed sandbox can hold edits newer than its last completed checkpoint.
     if (previous) for (const scope of WORK_FOLDER_SCOPES) await outgoing(scope);
     for (const scope of WORK_FOLDER_SCOPES) await incoming(scope);
     await prepareRepositories();
-    await recordCheckpoint("work_folder.prepared");
     await saveState("starting");
     if (previous?.refreshRequested) await db.update(workFolderRuns).set({ refreshRequested: false })
       .where(eq(workFolderRuns.runId, previous.runId));
@@ -306,10 +311,10 @@ export async function prepareSandboxWorkFolders(input: {
   const checkpointer = startWorkFolderCheckpointer({
     async checkpoint() {
       await assertBindings();
+      await recordCheckpoint("work_folder.checkpoint");
       await saveState("saving");
       for (const scope of WORK_FOLDER_SCOPES) await outgoing(scope);
       for (const { binding, root } of bindings) await repositories.checkpoint(binding, root);
-      await recordCheckpoint("work_folder.checkpoint");
       await saveState("saved");
     },
     async onError() { await saveState("failed", "Files could not be saved; the sandbox must be retained for recovery"); },
