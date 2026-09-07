@@ -1549,7 +1549,8 @@ describe("ACPX installation integrity", () => {
           `const profile = ${JSON.stringify(fixture.profile)};`,
           `const credential = await credentials.stageManagedCodexCredential({ agentHomeDirectory: ${JSON.stringify(credentialHome)}, environment: { PAPERCLIP_ACPX_CODEX_AUTH_JSON_SECRET: '{"owner":"original"}' } });`,
           `const paths = new Map(${JSON.stringify([...fixture.paths])});`,
-          "const installation = await module.verifyQualifiedAcpxInstallation(profile, (name) => paths.get(name));",
+          // This synthetic fixture exercises lifetime fencing, not the Pi ELF.
+          "const installation = await module.verifyQualifiedAcpxInstallation(profile, (name) => paths.get(name), { runtimeExecutable: async () => null, dependencies: [] });",
           "const lease = await installation.openCommand();",
           `const provider = lease.spawn([], { env: { ...process.env, PAPERCLIP_PROVIDER_PID_FILE: ${JSON.stringify(pidFile)} } }, { credentialFenceFds: credential.lifetimeFenceFds, activateCredentialFenceOwner: (pid) => credential.activateLifetimeOwner(pid) });`,
           "await module.awaitVerifiedAcpxProviderOwnership(provider);",
@@ -1648,7 +1649,7 @@ describe("ACPX installation integrity", () => {
           `const profile = ${JSON.stringify(fixture.profile)};`,
           `const credential = await credentials.stageManagedCodexCredential({ agentHomeDirectory: ${JSON.stringify(credentialHome)}, environment: { PAPERCLIP_ACPX_CODEX_AUTH_JSON_SECRET: '{"owner":"original"}' } });`,
           `const paths = new Map(${JSON.stringify([...fixture.paths])});`,
-          "const installation = await module.verifyQualifiedAcpxInstallation(profile, (name) => paths.get(name));",
+          "const installation = await module.verifyQualifiedAcpxInstallation(profile, (name) => paths.get(name), { runtimeExecutable: async () => null, dependencies: [] });",
           "const lease = await installation.openCommand();",
           `const provider = lease.spawn([], { env: { ...process.env, PAPERCLIP_PROVIDER_PID_FILE: ${JSON.stringify(pidFile)} } }, { credentialFenceFds: credential.lifetimeFenceFds, activateCredentialFenceOwner: (pid) => credential.activateLifetimeOwner(pid) });`,
           "await module.awaitVerifiedAcpxProviderOwnership(provider);",

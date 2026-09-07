@@ -291,7 +291,7 @@ describe("server adapter registry", () => {
     });
   });
 
-  it("keeps the ACPX Pi profile unavailable", async () => {
+  it("accepts the qualified ACPX Pi profile", async () => {
     const result = await requireServerAdapter("paperclip_runner").testEnvironment({
       companyId: "company-1",
       adapterType: "paperclip_runner",
@@ -303,8 +303,8 @@ describe("server adapter registry", () => {
     });
 
     expect(result).toMatchObject({
-      status: "fail",
-      checks: [{ code: "paperclip_runner_acpx_agent_unavailable" }],
+      status: "pass",
+      checks: [{ code: "acpx_profile_qualified", level: "info" }],
     });
   });
   it("wraps built-in npm runtime installs with the sandbox-aware install helper", () => {

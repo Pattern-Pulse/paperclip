@@ -370,6 +370,7 @@ describe("adapter routes", () => {
         options: [
           expect.objectContaining({ value: "claude" }),
           expect.objectContaining({ value: "codex" }),
+          expect.objectContaining({ value: "pi" }),
         ],
         meta: { visibleWhen: { key: "provider", value: "acpx" } },
       }),
@@ -383,7 +384,7 @@ describe("adapter routes", () => {
       }),
     ]));
     const acpxAgent = res.body.fields.find((field: { key?: string }) => field.key === "acpxAgent");
-    expect(acpxAgent.options).not.toContainEqual(expect.objectContaining({ value: "pi" }));
+    expect(acpxAgent.options).toContainEqual(expect.objectContaining({ value: "pi" }));
   });
 
   it("serves the built-in claude_local ACP engine config schema", async () => {

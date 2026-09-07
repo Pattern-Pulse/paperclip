@@ -56,7 +56,7 @@ describe("Paperclip Runner Codex configuration", () => {
     expect(html).not.toContain("Ask for untrusted operations");
   });
 
-  it("renders only the qualified ACPX Claude and Codex profiles", () => {
+  it("renders the qualified ACPX Claude, Codex, and Pi profiles", () => {
     const html = renderRunner({
       provider: "acpx",
       acpxAgent: "claude",
@@ -68,7 +68,7 @@ describe("Paperclip Runner Codex configuration", () => {
       '<option value="claude" selected="">Claude via ACPX</option>',
     );
     expect(html).toContain("Codex via ACPX");
-    expect(html).not.toContain("Pi via ACPX");
+    expect(html).toContain("Pi via ACPX");
     expect(html).toContain(
       '<option value="approve-reads" selected="">Conservative (fail closed)</option>',
     );
