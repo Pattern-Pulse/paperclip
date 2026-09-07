@@ -52,6 +52,8 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+      - name: Resolve branch manifest changes before the frozen install
+        run: pnpm install --lockfile-only --ignore-scripts --no-frozen-lockfile
       - run: pnpm install --frozen-lockfile
       - name: Build matching migrator artifacts
         env:
