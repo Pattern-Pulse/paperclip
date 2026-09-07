@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { test, expect } from "@playwright/test";
 import type { EnvironmentCapabilities } from "../../packages/shared/src/environment-support.js";
-import type { WorkFolderListing, WorkFolderSyncStatus } from "../../packages/shared/src/work-folders.js";
+import type { SandboxWorkFolderManifest, WorkFolderListing, WorkFolderSyncStatus } from "../../packages/shared/src/work-folders.js";
 import { QUALIFIED_ACPX_PROFILES } from "../../packages/paperclip-runner/src/drivers/acpx/qualified-profiles.js";
 import { pollUntil } from "./api.js";
-import { DeployedStackApi, loadDeployedStack } from "./deployed-stack.js";
+import { DeployedStackApi, deployedAgentEngine, loadDeployedStack } from "./deployed-stack.js";
 
 const stack = loadDeployedStack();
 const api = new DeployedStackApi(stack);
@@ -32,13 +32,16 @@ test("deployed candidate and complete supported adapter inventory", async ({}, i
       if (adapter.capabilities.supportsAcp) required.push(`${adapter.type}:acp`);
     }
   }
-  const configured = new Set(stack.profiles.map((profile) => `${profile.adapterType}:${profile.engine}`));
-  expect(required.filter((key) => !configured.has(key)), "Every exposed sandbox adapter/engine requires a qualified fixture").toEqual([]);
+  const configured = new Set<string>();
   for (const profile of stack.profiles) {
     const agent = await api.json<{ adapterType: string; adapterConfig: Record<string, unknown> }>(`/api/agents/${profile.agentId}`);
     expect(agent.adapterType).toBe(profile.adapterType);
     expect(agent.adapterConfig.model).toBe(profile.model);
+    const engine = deployedAgentEngine(agent);
+    expect(engine, `${profile.id} must exercise its declared live engine`).toBe(profile.engine);
+    configured.add(`${agent.adapterType}:${engine}`);
   }
+  expect(required.filter((key) => !configured.has(key)), "Every exposed sandbox adapter/engine requires a qualified fixture").toEqual([]);
   await info.attach("deployed-candidate-and-inventory", { contentType: "application/json", body: Buffer.from(JSON.stringify({ stack, required }, null, 2)) });
 });
 
@@ -83,6 +86,7 @@ for (const profile of stack.profiles) {
         "In each repo write 'staged' without newline to .acceptance-state, git add ONLY that file, then replace its working-tree content with 'unstaged' without newline. Write 'untracked' without newline to .acceptance-untracked and leave it untracked.",
         "If .acceptance-setup-count exists, assert it has exactly one line. Never run setup yourself.",
         `Write exactly '${nonce}' without a newline into $HOME/task/acceptance.txt and $HOME/agent/acceptance-${nonce}.txt.`,
+        `Also write exactly '${nonce}' to $HOME/.cache/warm-${nonce}; this disposable cache marker must survive an actual warm reuse.`,
         "Then complete this task successfully. Do not print credentials or modify unrelated files.",
       ].join("\n"),
     });
@@ -99,10 +103,15 @@ for (const profile of stack.profiles) {
     const content = await api.request(`${base}/content?path=acceptance.txt`);
     expect(content.status).toBe(200); expect(await content.text()).toBe(nonce);
     const coldRunIds = new Set(cold.saves.map((save) => save.runId));
+    const coldSave = cold.saves.find((save) => !save.active && save.state === "saved")!;
+    const coldRun = await api.json<{ contextSnapshot: { paperclipWorkFolders: SandboxWorkFolderManifest } }>(`/api/heartbeat-runs/${coldSave.runId}`);
+    const coldManifest = coldRun.contextSnapshot.paperclipWorkFolders;
+    expect(coldManifest.sandboxKey).toBeTruthy();
     await api.json(`/api/issues/${issue.id}`, "PATCH", { status: "todo", description: [
       "Continue this sandbox acceptance task. This is a warm run; inspect the existing work without repairing it.",
       "Verify cwd equals HOME and all seven directories still exist.",
       `Assert $HOME/task/acceptance.txt and every repo's committed HEAD:.acceptance-owner equal '${nonce}'.`,
+      `Assert $HOME/.cache/warm-${nonce} still contains exactly '${nonce}'. A replacement is not a warm pass; do not recreate the marker.`,
       "For each repo assert HEAD equals the saved task/head-<repo-directory-name>.txt, index :.acceptance-state equals 'staged', working .acceptance-state equals 'unstaged', and .acceptance-untracked equals 'untracked' and remains untracked.",
       "If .acceptance-setup-count exists, assert exactly one line. Fail with the actual discrepancy; do not recreate missing state or rerun setup.",
       `Write exactly '${nonce}' without a newline to $HOME/task/warm.txt, then complete the task.`,
@@ -117,7 +126,11 @@ for (const profile of stack.profiles) {
     });
     const warmContent = await api.request(`${base}/content?path=warm.txt`);
     expect(warmContent.status).toBe(200); expect(await warmContent.text()).toBe(nonce);
-    await info.attach("cold-and-warm-checkpoints", { contentType: "application/json", body: Buffer.from(JSON.stringify({ cold: cold.saves, warm: warm.saves })) });
+    const warmSave = warm.saves.find((save) => !save.active && save.state === "saved")!;
+    const warmRun = await api.json<{ contextSnapshot: { paperclipWorkFolders: SandboxWorkFolderManifest } }>(`/api/heartbeat-runs/${warmSave.runId}`);
+    const warmManifest = warmRun.contextSnapshot.paperclipWorkFolders;
+    expect(warmManifest.sandboxKey, "Warm acceptance requires the same physical sandbox").toBe(coldManifest.sandboxKey);
+    await info.attach("cold-and-warm-checkpoints", { contentType: "application/json", body: Buffer.from(JSON.stringify({ cold: cold.saves, warm: warm.saves, coldManifest, warmManifest })) });
   });
 }
 

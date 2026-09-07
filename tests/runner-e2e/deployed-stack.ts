@@ -16,6 +16,19 @@ export interface DeployedStack {
   profiles: Array<{ id: string; adapterType: string; engine: string; model: string; qualification: string; agentId: string }>;
 }
 
+/** Derive coverage from the live configuration, never a manifest's label. */
+export function deployedAgentEngine(agent: { adapterType: string; adapterConfig: Record<string, unknown> }): string {
+  const config = agent.adapterConfig;
+  if (agent.adapterType === "paperclip_runner") {
+    assert(config.provider === "codex" || config.provider === "opencode" || config.provider === "acpx", "Unknown native provider");
+    if (config.provider !== "acpx") return config.provider;
+    assert(typeof config.acpxAgent === "string" && config.acpxAgent.length > 0, "Missing native ACPX engine");
+    return `acpx:${config.acpxAgent}`;
+  }
+  assert(config.engine === undefined || config.engine === "cli" || config.engine === "acp", "Unknown legacy engine");
+  return config.engine === "acp" ? "acp" : "cli";
+}
+
 export function loadDeployedStack(): DeployedStack {
   const filename = process.env.PAPERCLIP_DEPLOYED_STACK_MANIFEST;
   if (!filename) throw new Error("PAPERCLIP_DEPLOYED_STACK_MANIFEST is required");

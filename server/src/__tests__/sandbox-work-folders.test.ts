@@ -6,9 +6,10 @@ import { eq } from "drizzle-orm";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { agents, assets, companyMemberships, issueAttachments, companies, createDb, heartbeatRuns, issues, environments, environmentLeases, projects, projectWorkspaces, taskRepositoryBindings, workFolderObjects, workFolderRuns, startEmbeddedPostgresTestDatabase, type Db } from "@paperclipai/db";
+import { agents, assets, companyMemberships, issueAttachments, companies, createDb, heartbeatRuns, issues, environments, environmentLeases, executionWorkspaces, projects, projectWorkspaces, taskRepositoryBindings, workFolderObjects, workFolderRuns, startEmbeddedPostgresTestDatabase, type Db } from "@paperclipai/db";
 import { createLocalDiskStorageProvider } from "../storage/local-disk-provider.js";
 import { prepareSandboxWorkFolders } from "../services/sandbox-work-folders.js";
+import { bindWarmSandboxWorkspace } from "../services/sandbox-workspace-binding.js";
 import { retainUnsavedWorkFolderLease, workFolderSandboxKey } from "../services/work-folder-retention.js";
 import * as activityLog from "../services/activity-log.js";
 import { workFolderService } from "../services/work-folders.js";
@@ -48,6 +49,25 @@ describe("shared sandbox work-folder lifecycle", () => {
   afterAll(async () => {
     for (const run of active) await run.stop().catch(() => {});
     await database?.cleanup(); if (root) await fs.rm(root, { recursive: true, force: true });
+  });
+  it("keeps the host's warm task binding without enabling user-configurable worktrees", async () => {
+    const task = randomUUID(), runId = randomUUID(), workspaceId = randomUUID();
+    await db.insert(heartbeatRuns).values({ id: runId, companyId, agentId, status: "running" });
+    await db.insert(issues).values({ id: task, companyId, projectId, title: "Warm binding", assigneeAgentId: agentId, executionRunId: runId });
+    await db.insert(executionWorkspaces).values({ id: workspaceId, companyId, projectId, sourceIssueId: task,
+      mode: "shared_workspace", strategyType: "project_primary", name: "Warm binding" });
+    const input = { companyId, issueId: task, runId, agentId, workspaceId };
+    await bindWarmSandboxWorkspace(db, input);
+    const [bound] = await db.select().from(issues).where(eq(issues.id, task));
+    expect(bound).toMatchObject({ executionWorkspaceId: workspaceId, executionWorkspacePreference: "reuse_existing", executionWorkspaceSettings: null });
+    for (const bad of [{ companyId: randomUUID() }, { agentId: randomUUID() }, { issueId: taskId }, { runId: randomUUID() }]) {
+      await expect(bindWarmSandboxWorkspace(db, { ...input, ...bad })).rejects.toThrow("active task run");
+    }
+    await db.update(executionWorkspaces).set({ sourceIssueId: taskId }).where(eq(executionWorkspaces.id, workspaceId));
+    await expect(bindWarmSandboxWorkspace(db, input)).rejects.toThrow("active task run");
+    await db.update(executionWorkspaces).set({ sourceIssueId: task }).where(eq(executionWorkspaces.id, workspaceId));
+    await db.update(heartbeatRuns).set({ status: "succeeded" }).where(eq(heartbeatRuns.id, runId));
+    await expect(bindWarmSandboxWorkspace(db, input)).rejects.toThrow("active task run");
   });
   async function prepare(home: string, leaseId: string, physicalId = leaseId, responsibleUserId: string | null = null,
     options: { taskId?: string; branchName?: string; agentId?: string } = {}) {
