@@ -110,7 +110,8 @@ export function createIsolatedCodexAppServerArgs(
     ...readOnlyRoots.map((path) => `${tomlString(resolve(path))}="read"`),
     `":workspace_roots"={"."="read"}`,
   ].join(",");
-  const commandEnv = Object.entries(codexCommandEnvironment(source))
+  const commandEnvironment = codexCommandEnvironment(source);
+  const commandEnv = Object.entries(commandEnvironment)
     .map(([key, value]) => `${key}=${tomlString(value)}`)
     .join(",");
   const defaultPermissionProfile = externalRunnerSandbox
@@ -142,7 +143,10 @@ export function createIsolatedCodexAppServerArgs(
     ...(hasGitHubCredential
       ? [
           "-c",
-          `shell_environment_policy.include_only=${JSON.stringify(inheritedGitHubKeys)}`,
+          // Codex applies include_only after set. Keep the explicit, safe
+          // command environment too, or GitHub-enabled shells lose PATH and
+          // the external sandbox's scoped HOME despite the overrides below.
+          `shell_environment_policy.include_only=${JSON.stringify([...new Set([...inheritedGitHubKeys, ...Object.keys(commandEnvironment)])])}`,
         ]
       : []),
     ...(commandEnv.length > 0

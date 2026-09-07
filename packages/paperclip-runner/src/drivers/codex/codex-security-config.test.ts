@@ -79,6 +79,41 @@ describe("Codex security configuration", () => {
     expect(serialized).not.toContain("!trusted-helper");
   });
 
+  it("preserves the scoped shell environment through the final GitHub allowlist", () => {
+    const scoped = {
+      HOME: "/home/daytona",
+      PAPERCLIP_TASK_DIR: "/home/daytona/task",
+      PAPERCLIP_AGENT_DIR: "/home/daytona/agent",
+      PAPERCLIP_USER_DIR: "/home/daytona/user",
+      PAPERCLIP_PROJECT_DIR: "/home/daytona/project",
+      PAPERCLIP_REPOS_DIR: "/home/daytona/repos",
+      PAPERCLIP_PRIMARY_REPO: "/home/daytona/repos/private-repo",
+      PAPERCLIP_WORKSPACE_CWD: "/home/daytona/repos/private-repo",
+      PAPERCLIP_RUNNER_EXTERNAL_SANDBOX: "1",
+    };
+    const args = createIsolatedCodexAppServerArgs({
+      ...scoped, PATH: "/usr/local/bin:/usr/bin:/bin", LANG: "C.UTF-8",
+      GITHUB_TOKEN: "github-secret", OPENAI_API_KEY: "provider-secret",
+      CODEX_HOME: "/home/daytona/.codex", DATABASE_URL: "host-secret",
+    });
+    const prefix = "shell_environment_policy.include_only=";
+    const allowed = JSON.parse(args.find((arg) => arg.startsWith(prefix))!.slice(prefix.length));
+    // Codex applies this allowlist AFTER its explicit environment overrides.
+    expect(allowed.sort()).toEqual([
+      "GITHUB_TOKEN", "PATH", "LANG", "AGENT_HOME", ...Object.keys(scoped),
+    ].sort());
+    expect(args.join("\n")).not.toContain("github-secret");
+    expect(args.join("\n")).not.toContain("provider-secret");
+    expect(args.join("\n")).not.toContain("host-secret");
+
+    const localArgs = createIsolatedCodexAppServerArgs({
+      HOME: "/host/private", CODEX_HOME: "/host/codex", PATH: "/bin",
+      GITHUB_TOKEN: "github-secret",
+    });
+    const localAllowed = JSON.parse(localArgs.find((arg) => arg.startsWith(prefix))!.slice(prefix.length));
+    expect(localAllowed.sort()).toEqual(["GITHUB_TOKEN", "PATH"]);
+  });
+
   it("uses a read-only permission profile for plan mode", () => {
     expect(createSecuredCodexThreadParams("/workspace", "plan")).toMatchObject({
       cwd: "/workspace",
