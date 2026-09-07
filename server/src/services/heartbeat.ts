@@ -18040,6 +18040,7 @@ export function heartbeatService(
     let sandboxWorkFolders: Awaited<ReturnType<typeof prepareSandboxWorkFolders>> | null = null;
     let workFolderSaveFailed = false;
     let nativeTaskSessionPersisted = false;
+    let beforeWorkFolderCompletion: (() => Promise<void>) | undefined;
     let workFolderLeaseId: string | null = null;
     let nativeSessionResumeScheduled = false;
     let nativeWorkspaceFinalizeScheduled = false;
@@ -21612,35 +21613,38 @@ export function heartbeatService(
           // finalize row.
           if (sandboxWorkFolders) {
             if (adapterResult.nativeFinalization && taskKey) {
-              // Publish the resumable identity before the final file-save
-              // barrier lets native reconciliation expose terminal status.
-              // A user can start the next turn as soon as completion appears.
-              const sessionState = resolveNextSessionState({
-                adapterType: agent.adapterType,
-                codec: sessionCodec,
-                adapterResult,
-                outcome: adapterResult.nativeFinalization.terminal.runTerminalState === "succeeded"
-                  ? "succeeded" : "failed",
-                previousParams: previousSessionParams,
-                previousDisplayId: runtimeForAdapter.sessionDisplayId,
-                previousLegacySessionId: runtimeForAdapter.sessionId,
-              });
-              await upsertTaskSession({
-                companyId: agent.companyId,
-                agentId: agent.id,
-                adapterType: agent.adapterType,
-                taskKey,
-                sessionParamsJson: attachPaperclipSessionMetadataToSessionParams(
-                  sessionState.params, configuredModel, sessionConfigMetadata,
-                ),
-                sessionDisplayId: sessionState.displayId,
-                lastRunId: run.id,
-                lastError: adapterResult.errorMessage ?? null,
-              });
-              nativeTaskSessionPersisted = true;
+              const nativeTerminal = adapterResult.nativeFinalization.terminal.runTerminalState;
+              beforeWorkFolderCompletion = async () => {
+                if (nativeTaskSessionPersisted) return;
+                // The coordinator invokes this after saving data and before
+                // publishing the barrier that allows terminal reconciliation.
+                const sessionState = resolveNextSessionState({
+                  adapterType: agent.adapterType,
+                  codec: sessionCodec,
+                  adapterResult,
+                  outcome: nativeTerminal === "succeeded"
+                    ? "succeeded" : "failed",
+                  previousParams: previousSessionParams,
+                  previousDisplayId: runtimeForAdapter.sessionDisplayId,
+                  previousLegacySessionId: runtimeForAdapter.sessionId,
+                });
+                await upsertTaskSession({
+                  companyId: agent.companyId,
+                  agentId: agent.id,
+                  adapterType: agent.adapterType,
+                  taskKey,
+                  sessionParamsJson: attachPaperclipSessionMetadataToSessionParams(
+                    sessionState.params, configuredModel, sessionConfigMetadata,
+                  ),
+                  sessionDisplayId: sessionState.displayId,
+                  lastRunId: run.id,
+                  lastError: adapterResult.errorMessage ?? null,
+                });
+                nativeTaskSessionPersisted = true;
+              };
             }
             workFolderSaveFailed = true;
-            await sandboxWorkFolders.stop();
+            await sandboxWorkFolders.stop(beforeWorkFolderCompletion);
             sandboxWorkFolders = null;
             workFolderSaveFailed = false;
           }
@@ -22854,7 +22858,7 @@ export function heartbeatService(
       }
     } finally {
       if (sandboxWorkFolders) {
-        try { await sandboxWorkFolders.stop(); workFolderSaveFailed = false; }
+        try { await sandboxWorkFolders.stop(beforeWorkFolderCompletion); workFolderSaveFailed = false; }
         catch (error) { workFolderSaveFailed = true; logger.error({ err: error, runId: run.id }, "Work folder save failed; retaining sandbox for recovery"); }
       }
       let latestRun = await getRun(run.id).catch(() => null);

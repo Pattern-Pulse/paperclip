@@ -41,7 +41,7 @@ export function repoAcceptancePrompt(nonce: string, warm: boolean): string {
   return [
     "Execute this exact acceptance shell script from your initial working directory in one tool call. Use real filesystem tools; do not simulate its result.",
     warm ? "This must reuse the same warm sandbox. Do not repair, recreate, or reset missing state." : "This creates disposable local commits and staged, unstaged, and untracked test files. Do not push.",
-    'If any assertion fails, stop and PATCH the task with status "blocked" and unblockDescriptor {"owner":"board","action":"Investigate the failed acceptance assertion"}, including the actual error in your comment. Otherwise mark the Paperclip task done after the script succeeds.',
+    'If any assertion fails, stop and PATCH the task with status "blocked" and unblockDescriptor {"owner":{"agentId":"<your PAPERCLIP_AGENT_ID>"},"action":"Investigate the failed acceptance assertion"}, replacing the placeholder with your agent ID and including the actual error in your comment. Otherwise mark the Paperclip task done after the script succeeds.',
     "```sh", repoAcceptanceScript(nonce, warm), "```",
   ].join("\n");
 }
