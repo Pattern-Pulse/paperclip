@@ -24,7 +24,13 @@ describe("sandbox work folder transport with real Node and Git", () => {
     const body = Buffer.alloc(700_000, "x");
     const entry = { path: "nested/file", kind: "file" as const, byteSize: body.length,
       sha256: createHash("sha256").update(body).digest("hex"), executable: true };
-    await transport.write(dir, staging, entry, Readable.from([body]));
+    const boundedTransport = workFolderTransport({ async execute(input) {
+      // macOS permits larger argv entries than Linux; enforce the deployment
+      // bound here as well so this regression is caught on developer machines.
+      expect(Buffer.byteLength([input.command, ...(input.args ?? [])].join(" "))).toBeLessThan(120 * 1024);
+      return localTestWorkFolderRunner.execute(input);
+    } });
+    await boundedTransport.write(dir, staging, entry, Readable.from([body]));
     expect(await readFile(path.join(dir, entry.path))).toEqual(body);
     const files = await transport.scan(dir);
     expect(files.find((file) => file.path === entry.path)).toEqual(entry);

@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
-import fs from "node:fs/promises";
 import path from "node:path";
+import { managedAgentFiles } from "./work-folder-agent-import.js";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { agents, assets, companyMemberships, heartbeatRuns, issues, projects, issueAttachments, projectWorkspaces, taskRepositoryBindings, workFileOperations, workFolderRuns, workFolders, type Db } from "@paperclipai/db";
 import { WORK_FOLDER_SCOPES, type SandboxWorkFolderManifest, type WorkFolderScope } from "@paperclipai/shared";
@@ -15,6 +14,7 @@ import { workFolderService } from "./work-folders.js";
 import { workFolderPaths, workFolderTransport, type WorkTreeEntry } from "./work-folder-transport.js";
 import { workFolderRepositoryService } from "./work-folder-repositories.js";
 import { startWorkFolderCheckpointer } from "./work-folder-checkpointer.js";
+import { logActivity } from "./activity-log.js";
 import { assertWorkFolderAccess } from "./work-folder-access.js";
 
 function signature(entry: WorkTreeEntry | undefined) {
@@ -125,26 +125,12 @@ export async function prepareSandboxWorkFolders(input: {
     const folder = folders.agent!;
     if (folder.importedAt) return;
     const root = resolveDefaultAgentWorkspaceDir(input.agentId);
-    async function visit(relative: string) {
-      if (relative) {
-        const [receipt] = await db.select({ id: workFileOperations.id }).from(workFileOperations).where(and(
-          eq(workFileOperations.folderId, folder.id), eq(workFileOperations.operationId, `import:${relative}`)));
-        // Still descend into previously imported directories after an interrupted import.
-        if (receipt && !(await fs.lstat(path.join(root, relative))).isDirectory()) return;
-      }
-      const stat = await fs.lstat(path.join(root, relative));
-      if (stat.isSymbolicLink()) throw new Error("Managed agent home contains an unsupported symbolic link");
-      if (stat.isDirectory()) {
-        if (relative) await svc.write(folder, { path: relative, kind: "directory", operationId: `import:${relative}`, onlyIfMissing: true });
-        for (const name of (await fs.readdir(path.join(root, relative))).sort()) {
-          if ([".codex", ".claude", ".cache", ".config", ".local", ".git", ".paperclip-runtime", ".ssh", ".aws", ".azure", ".netrc", ".git-credentials", ".npmrc", ".npm", "node_modules", ".venv"].includes(name)) continue;
-          await visit(relative ? `${relative}/${name}` : name);
-        }
-      } else if (stat.isFile()) {
-        await svc.write(folder, { path: relative, body: createReadStream(path.join(root, relative)), operationId: `import:${relative}`, onlyIfMissing: true, executable: Boolean(stat.mode & 0o111) });
-      } else throw new Error("Managed agent home contains an unsupported file");
+    for await (const file of managedAgentFiles(root)) {
+      const [receipt] = await db.select({ id: workFileOperations.id }).from(workFileOperations).where(and(
+        eq(workFileOperations.folderId, folder.id), eq(workFileOperations.operationId, `import:${file.path}`)));
+      if (receipt) continue;
+      await svc.write(folder, { ...file, operationId: `import:${file.path}`, onlyIfMissing: true });
     }
-    try { await visit(""); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     await db.update(workFolders).set({ importedAt: new Date() }).where(eq(workFolders.id, folder.id));
   }
   async function outgoing(scope: WorkFolderScope) {
@@ -294,6 +280,12 @@ export async function prepareSandboxWorkFolders(input: {
     await db.update(workFolderRuns).set({ state, baselines, pendingOperations, manifest, error, updatedAt: new Date(),
       ...(state === "saved" ? { lastSavedAt: new Date() } : {}) }).where(eq(workFolderRuns.runId, input.runId));
   }
+  async function recordCheckpoint(action: string) {
+    await logActivity(db, { companyId: input.companyId, actorType: "agent", actorId: input.agentId,
+      agentId: input.agentId, runId: input.runId, issueId: input.taskId,
+      responsibleUserIdOverride: input.responsibleUserId, action, entityType: "heartbeat_run", entityId: input.runId,
+      details: { scopes: WORK_FOLDER_SCOPES.filter((scope) => Boolean(folders[scope])), repositories: bindings.length } });
+  }
   try {
     await seedAttachments();
     await importAgentFiles();
@@ -301,6 +293,7 @@ export async function prepareSandboxWorkFolders(input: {
     if (previous) for (const scope of WORK_FOLDER_SCOPES) await outgoing(scope);
     for (const scope of WORK_FOLDER_SCOPES) await incoming(scope);
     await prepareRepositories();
+    await recordCheckpoint("work_folder.prepared");
     await saveState("starting");
     if (previous?.refreshRequested) await db.update(workFolderRuns).set({ refreshRequested: false })
       .where(eq(workFolderRuns.runId, previous.runId));
@@ -314,6 +307,7 @@ export async function prepareSandboxWorkFolders(input: {
       await saveState("saving");
       for (const scope of WORK_FOLDER_SCOPES) await outgoing(scope);
       for (const { binding, root } of bindings) await repositories.checkpoint(binding, root);
+      await recordCheckpoint("work_folder.checkpoint");
       await saveState("saved");
     },
     async onError() { await saveState("failed", "Files could not be saved; the sandbox must be retained for recovery"); },

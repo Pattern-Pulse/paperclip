@@ -11,6 +11,9 @@ const entrySchema = z.object({ path: z.string().refine((value) => { try { valida
   sha256: z.string().regex(/^[a-f0-9]{64}$/).nullable(), executable: z.boolean(), linkTarget: z.string().max(1024).optional() });
 export type WorkTreeEntry = z.infer<typeof entrySchema>;
 let source: Promise<string> | undefined;
+// Requests are base64 encoded twice (file bytes, then JSON). Stay below
+// Linux's 128 KiB single-argument limit, including a provider shell wrapper.
+const WRITE_CHUNK_BYTES = 48 * 1024;
 
 export function workFolderTransport(runner: CommandManagedRuntimeRunner) {
   async function command(input: Record<string, unknown>): Promise<unknown> {
@@ -44,8 +47,8 @@ export function workFolderTransport(runner: CommandManagedRuntimeRunner) {
     let offset = 0;
     for await (const value of body) {
       const chunk = Buffer.from(value);
-      for (let start = 0; start < chunk.length; start += 256 * 1024) {
-        const bytes = chunk.subarray(start, start + 256 * 1024);
+      for (let start = 0; start < chunk.length; start += WRITE_CHUNK_BYTES) {
+        const bytes = chunk.subarray(start, start + WRITE_CHUNK_BYTES);
         await command({ operation: "write", root: stagingRoot, path: stagingPath, offset, data: bytes.toString("base64") });
         offset += bytes.length;
       }

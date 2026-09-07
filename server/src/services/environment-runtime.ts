@@ -56,6 +56,7 @@ import {
   getSandboxProvider as getBuiltinSandboxProvider,
   isBuiltinSandboxProvider,
   releaseSandboxProviderLease,
+  resumeSandboxProviderLease,
   sandboxConfigFromLeaseMetadata,
   sandboxConfigFromLeaseMetadataLoose,
 } from "./sandbox-provider-runtime.js";
@@ -1893,7 +1894,8 @@ function createSandboxEnvironmentDriver(
           input.heartbeatRunId !== null &&
           input.executionWorkspaceId !== null &&
           input.agentId !== null
-          ? findReusableSandboxLeaseId({ config: storedConfig, leases: reusableExistingLeases })
+          ? (reusableExistingLeases.find((lease) => lease.metadata?.workFolderRecoveryRequired === true)?.providerLeaseId
+            ?? findReusableSandboxLeaseId({ config: storedConfig, leases: reusableExistingLeases }))
           : null;
         const reusableLease = reusableProviderLeaseId
           ? reusableExistingLeases.find((lease) => lease.providerLeaseId === reusableProviderLeaseId)
@@ -2254,7 +2256,8 @@ function createSandboxEnvironmentDriver(
         input.heartbeatRunId !== null &&
         input.executionWorkspaceId !== null &&
         input.agentId !== null
-          ? findReusableSandboxLeaseId({ config: parsed.config, leases: reusableExistingLeases })
+          ? (reusableExistingLeases.find((lease) => lease.metadata?.workFolderRecoveryRequired === true)?.providerLeaseId
+            ?? findReusableSandboxLeaseId({ config: parsed.config, leases: reusableExistingLeases }))
         : null;
       const reusableLease = reusableProviderLeaseId
         ? reusableExistingLeases.find((lease) => lease.providerLeaseId === reusableProviderLeaseId)
@@ -2262,7 +2265,14 @@ function createSandboxEnvironmentDriver(
 
       let providerLease;
       try {
-        providerLease = await acquireSandboxProviderLease({
+        if (reusableLease?.metadata?.workFolderRecoveryRequired === true) {
+          // Recovery overrides the original ephemeral disposal policy, after
+          // the full host-owned identity/configuration fingerprint matched.
+          providerLease = await resumeSandboxProviderLease({ config: parsed.config, providerLeaseId: reusableLease.providerLeaseId! });
+          if (!providerLease || providerLease.providerLeaseId !== reusableLease.providerLeaseId) {
+            throw new Error("Unsaved sandbox could not be resumed; original work was retained");
+          }
+        } else providerLease = await acquireSandboxProviderLease({
           config: parsed.config,
           environmentId: input.environment.id,
           heartbeatRunId: input.heartbeatRunId ?? randomUUID(),

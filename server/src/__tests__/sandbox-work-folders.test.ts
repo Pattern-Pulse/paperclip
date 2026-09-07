@@ -47,14 +47,15 @@ describe("shared sandbox work-folder lifecycle", () => {
     await database?.cleanup(); if (root) await fs.rm(root, { recursive: true, force: true });
   });
   async function prepare(home: string, leaseId: string, physicalId = leaseId, responsibleUserId: string | null = null,
-    options: { taskId?: string; branchName?: string } = {}) {
+    options: { taskId?: string; branchName?: string; agentId?: string } = {}) {
     await fs.mkdir(home, { recursive: true });
     const runId = randomUUID();
-    await db.insert(heartbeatRuns).values({ id: runId, companyId, agentId, responsibleUserId, status: "running" });
+    const boundAgentId = options.agentId ?? agentId;
+    await db.insert(heartbeatRuns).values({ id: runId, companyId, agentId: boundAgentId, responsibleUserId, status: "running" });
     const lease = { id: leaseId, companyId, environmentId, provider: "test", providerLeaseId: physicalId };
     await db.insert(environmentLeases).values({ ...lease, heartbeatRunId: runId }).onConflictDoUpdate({ target: environmentLeases.id, set: { heartbeatRunId: runId } });
     const [primary] = await db.select().from(projectWorkspaces).where(eq(projectWorkspaces.projectId, projectId));
-    const run = await prepareSandboxWorkFolders({ db, companyId, agentId, projectId, taskId: options.taskId ?? taskId, runId,
+    const run = await prepareSandboxWorkFolders({ db, companyId, agentId: boundAgentId, projectId, taskId: options.taskId ?? taskId, runId,
       primaryWorkspaceId: primary!.id, primaryBranchName: options.branchName,
       responsibleUserId, storage, sandboxKey: workFolderSandboxKey(lease), target: { kind: "remote", transport: "sandbox", leaseId, remoteCwd: home,
         runner: { execute: (input) => localTestWorkFolderRunner.execute({ ...input, env: { ...input.env, HOME: home } }) } } });
@@ -218,6 +219,26 @@ describe("shared sandbox work-folder lifecycle", () => {
     expect((await exec("git", ["-C", warm.primaryRepo, "branch", "--show-current"])).stdout.trim()).toBe("acceptance/second-task");
     expect(await fs.readFile(path.join(warm.primaryRepo, "tracked"), "utf8")).toBe("second task edit");
     await warm.stop(); active.splice(active.indexOf(warm), 1);
+  }, 120_000);
+
+  it("restores task work across identities without carrying over private homes or sessions", async () => {
+    const otherAgentId = randomUUID(), firstUser = randomUUID(), secondUser = randomUUID();
+    await db.insert(agents).values({ id: otherAgentId, companyId, name: "Replacement agent" });
+    for (const userId of [firstUser, secondUser]) await db.insert(companyMemberships).values({ companyId, principalType: "user", principalId: userId, membershipRole: "member" });
+    const lease = randomUUID(); const first = await prepare(path.join(root, "identity-one"), lease, lease, firstUser);
+    await fs.writeFile(path.join(first.home, "task/identity.txt"), "shared task work");
+    await fs.writeFile(path.join(first.home, "agent/identity-private"), "old agent only");
+    await fs.writeFile(path.join(first.home, "user/identity-private"), "old user only");
+    await fs.writeFile(path.join(first.home, ".codex/session-private"), "old provider session");
+    await first.stop(); active.splice(active.indexOf(first), 1);
+    await expect(prepare(first.home, randomUUID(), lease, secondUser, { agentId: otherAgentId })).rejects.toThrow("fresh sandbox");
+    const replacementLease = randomUUID();
+    const replacement = await prepare(path.join(root, "identity-two"), replacementLease, replacementLease, secondUser, { agentId: otherAgentId });
+    expect(replacement.identityChanged).toBe(true);
+    expect(await fs.readFile(path.join(replacement.home, "task/identity.txt"), "utf8")).toBe("shared task work");
+    for (const file of ["agent/identity-private", "user/identity-private", ".codex/session-private"]) await expect(fs.access(path.join(replacement.home, file))).rejects.toThrow();
+    expect(replacement.manifest.repositories).toHaveLength(2);
+    await replacement.stop(); active.splice(active.indexOf(replacement), 1);
   }, 120_000);
 
   it("collects superseded repository objects while retaining the complete current checkpoint", async () => {

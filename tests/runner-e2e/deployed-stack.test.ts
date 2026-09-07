@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isStagingOrigin } from "./deployed-stack.js";
+import { isStagingOrigin, assertDeployedAdapterExclusions } from "./deployed-stack.js";
 
 describe("deployed stack target", () => {
   it("requires an explicit HTTPS staging tenant and rejects credential-bearing URLs", () => {
@@ -9,4 +9,11 @@ describe("deployed stack target", () => {
       expect(isStagingOrigin(value), value).toBe(false);
     }
   });
+});
+
+it("allows only the four explicitly deferred adapters to be excluded", () => {
+  expect(() => assertDeployedAdapterExclusions([{ adapterType: "cursor", reason: "Explicitly deferred by the user" }])).not.toThrow();
+  for (const adapterType of ["codex_local", "claude_local", "opencode_local", "pi_local", "paperclip_runner"]) {
+    expect(() => assertDeployedAdapterExclusions([{ adapterType, reason: "skip" }])).toThrow("cannot be excluded");
+  }
 });

@@ -1,3 +1,4 @@
+import { externalWorkFolderEnvironment } from "../work-folder-environment.js";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -1796,6 +1797,7 @@ export function createCapabilityRunnerdProviderEnvironment(input: {
   if (input.provider === "opencode") {
     return {
       ...createSanitizedOpenCodeRunnerEnvironment(input.options.environment),
+      ...externalWorkFolderEnvironment(input.options.environment ?? {}),
       PAPERCLIP_OPENCODE_PERMISSION_MODE:
         input.options.opencodePermissionMode ?? "ask",
       PAPERCLIP_OPENCODE_RUNTIME_DIR:
@@ -1848,7 +1850,7 @@ export function createCapabilityRunnerdProviderEnvironment(input: {
   }
   const environment = createSanitizedCodexEnvironment({
     ...input.options.environment,
-    HOME: input.codexHome,
+    HOME: externalWorkFolderEnvironment(input.options.environment ?? {}).HOME ?? input.codexHome,
     CODEX_HOME: input.codexHome,
   });
   for (const key of ["OPENAI_API_KEY", "CODEX_API_KEY"] as const) {
@@ -1949,7 +1951,7 @@ export function createRunnerdCodexAppServerArgs(input: {
   return createIsolatedCodexAppServerArgs(
     {
       ...input.environment,
-      HOME: input.codexHome,
+      HOME: externalWorkFolderEnvironment(input.environment ?? {}).HOME ?? input.codexHome,
       CODEX_HOME: input.codexHome,
     },
     input.readOnlyRoots,
@@ -2929,7 +2931,8 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       );
     }
     const localCodexHome = resolve(this.#root, "codex-home");
-    const codexHome = this.options.runnerFilesystemRoot
+    const scopedHome = externalWorkFolderEnvironment(this.options.environment ?? {}).HOME;
+    const codexHome = scopedHome ? resolve(scopedHome, ".codex") : this.options.runnerFilesystemRoot
       ? resolve(this.options.runnerFilesystemRoot, "codex-home")
       : localCodexHome;
     if (provider === "aws_agentcore") {
@@ -3461,7 +3464,8 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       );
     }
     const localCodexHome = resolve(this.#root, "codex-home");
-    const codexHome = this.options.runnerFilesystemRoot
+    const scopedHome = externalWorkFolderEnvironment(this.options.environment ?? {}).HOME;
+    const codexHome = scopedHome ? resolve(scopedHome, ".codex") : this.options.runnerFilesystemRoot
       ? resolve(this.options.runnerFilesystemRoot, "codex-home")
       : localCodexHome;
     if (provider === "aws_agentcore") {

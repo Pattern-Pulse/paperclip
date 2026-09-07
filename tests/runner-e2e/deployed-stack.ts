@@ -29,12 +29,7 @@ export function loadDeployedStack(): DeployedStack {
   assert(/@sha256:[a-f0-9]{64}$/.test(manifest.sandboxImage), "Expected immutable sandbox image");
   const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
   for (const key of ["companyId", "taskId", "agentId", "projectId"] as const) assert(uuid.test(manifest[key]), `Invalid ${key}`);
-  if (manifest.excludedAdapters !== undefined) {
-    assert(Array.isArray(manifest.excludedAdapters), "Invalid adapter exclusions");
-    for (const exclusion of manifest.excludedAdapters) {
-      assert(typeof exclusion.adapterType === "string" && typeof exclusion.reason === "string" && exclusion.reason.trim().length > 0, "Exclusions require an explicit reason");
-    }
-  }
+  assertDeployedAdapterExclusions(manifest.excludedAdapters);
   assert(Array.isArray(manifest.profiles) && manifest.profiles.length >= 7, "The seven baseline profiles are required");
   for (const profile of manifest.profiles) {
     for (const key of ["id", "adapterType", "engine", "model", "qualification", "agentId"] as const) {
@@ -76,5 +71,15 @@ export class DeployedStackApi {
     });
     if (!response.ok) throw new Error(`${method} ${path.split("?")[0]} returned ${response.status}; body withheld`);
     return response.json() as Promise<T>;
+  }
+}
+
+/** User-approved scope for this acceptance campaign; core engines cannot be excluded. */
+export function assertDeployedAdapterExclusions(exclusions: DeployedStack["excludedAdapters"]) {
+  if (exclusions === undefined) return;
+  assert(Array.isArray(exclusions), "Invalid adapter exclusions");
+  for (const entry of exclusions) {
+    assert(["cursor", "gemini_local", "grok_local", "kimi_local"].includes(entry.adapterType), "Core acceptance adapters cannot be excluded");
+    assert(typeof entry.reason === "string" && entry.reason.trim().length > 0, "Exclusions require an explicit reason");
   }
 }
