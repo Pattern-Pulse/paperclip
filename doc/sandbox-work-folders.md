@@ -151,6 +151,16 @@ All routes start at
 
 ## Acceptance gate
 
+The Cloud app image includes a build-owned remote provider pack at
+`/opt/paperclip-runner/provider-pack` and configures
+`PAPERCLIP_RUNNER_REMOTE_PROVIDER_PACK_PATH` to that directory. Native OpenCode
+and ACPX runs verify the sandbox's installed pack against this manifest; if it
+differs, the host stages its complete pack before launch. The pack is built
+from the app revision, includes the production lockfile and artifact hashes,
+and must pass its provider-launch checks during the image build. It belongs to
+the app image, not the workspace volume or a scoped file collection. Ordinary
+local execution is unchanged.
+
 Automated tests do not qualify a deployed runner image. Before merging, use a
 new pinned staging stack with the branch's Cloud image and matching migrator.
 The deployed harness must target that tenant URL without launching a local
