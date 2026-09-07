@@ -146,6 +146,17 @@ test("saves during two real 180-second intervals and flushes the final edit", as
   }
   const first = observations[0]!.saves.find((save) => save.active)!;
   const second = observations[1]!.saves.find((save) => save.runId === first.runId)!;
-  expect(Date.parse(second.lastSavedAt!) - Date.parse(first.lastSavedAt!)).toBeGreaterThanOrEqual(170_000);
-  await info.attach("real-checkpoint-intervals", { contentType: "application/json", body: Buffer.from(JSON.stringify(observations, null, 2)) });
+  // Upload duration varies; completion times do not measure the timer cadence.
+  // The host records checkpoint intent before transferring any files.
+  const activity = await api.json<Array<{ action: string; runId: string | null; createdAt: string }>>(
+    `/api/companies/${stack.companyId}/activity?entityType=heartbeat_run&entityId=${first.runId}&limit=100`,
+  );
+  const starts = activity.filter((entry) => entry.action === "work_folder.checkpoint" && entry.runId === first.runId)
+    .map((entry) => Date.parse(entry.createdAt)).sort((a, b) => a - b);
+  await info.attach("real-checkpoint-intervals", { contentType: "application/json", body: Buffer.from(JSON.stringify({ observations, starts }, null, 2)) });
+  expect(starts.length).toBeGreaterThanOrEqual(3);
+  expect(starts[1]! - starts[0]!).toBeGreaterThanOrEqual(179_000);
+  expect(starts[1]! - starts[0]!).toBeLessThan(210_000);
+  expect(starts[0]!).toBeLessThanOrEqual(Date.parse(first.lastSavedAt!));
+  expect(starts[1]!).toBeLessThanOrEqual(Date.parse(second.lastSavedAt!));
 });
