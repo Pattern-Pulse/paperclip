@@ -8,6 +8,9 @@ and `PAPERCLIP_DEPLOYED_STACK_EVIDENCE` to an absolute output directory.
 The harness never launches a local server. It checks the deployed commit and
 adapter inventory, exercises scoped file APIs, and starts real sandbox tasks
 for every configured profile, including cold/warm Git state and real timed saves.
+Engine coverage is derived from each live agent's configuration. A warm pass
+requires the same host-recorded physical sandbox identity and a surviving cache
+marker; restoring durable files into a replacement is tested separately.
 The maintainer-approved matrix is Codex, Claude, OpenCode, and Pi in both runner
 generations (11 CLI/ACP profiles). Only Cursor, Gemini, Grok, and Kimi are deferred
 for this campaign. Missing required profiles fail the inventory gate.
@@ -18,6 +21,9 @@ scenarios; passing them alone is not staging acceptance.
 Sandbox runs use the operating-system user's home directory. Both legacy
 adapters and the native runner enter the same host-owned lifecycle before
 dispatch. Local execution keeps its existing workspace and home behavior.
+Warm sandbox task bindings persist independently of the experimental isolated
+workspace setting. Only the active host run can establish that binding; the
+setting still controls user-configurable worktree operations.
 
 ```text
 $HOME/

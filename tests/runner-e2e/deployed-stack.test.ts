@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isStagingOrigin, assertDeployedAdapterExclusions } from "./deployed-stack.js";
+import { isStagingOrigin, assertDeployedAdapterExclusions, deployedAgentEngine } from "./deployed-stack.js";
 
 describe("deployed stack target", () => {
   it("requires an explicit HTTPS staging tenant and rejects credential-bearing URLs", () => {
@@ -9,6 +9,16 @@ describe("deployed stack target", () => {
       expect(isStagingOrigin(value), value).toBe(false);
     }
   });
+});
+
+it("derives engine coverage from live adapter configuration", () => {
+  expect(deployedAgentEngine({ adapterType: "codex_local", adapterConfig: {} })).toBe("cli");
+  expect(deployedAgentEngine({ adapterType: "claude_local", adapterConfig: { engine: "acp" } })).toBe("acp");
+  expect(deployedAgentEngine({ adapterType: "paperclip_runner", adapterConfig: { provider: "codex" } })).toBe("codex");
+  expect(deployedAgentEngine({ adapterType: "paperclip_runner", adapterConfig: { provider: "acpx", acpxAgent: "pi" } })).toBe("acpx:pi");
+  expect(deployedAgentEngine({ adapterType: "paperclip_runner", adapterConfig: { provider: "acpx", acpxAgent: "claude" } })).not.toBe("acpx:pi");
+  expect(() => deployedAgentEngine({ adapterType: "paperclip_runner", adapterConfig: { provider: "acpx" } })).toThrow("Missing");
+  expect(() => deployedAgentEngine({ adapterType: "codex_local", adapterConfig: { engine: "unknown" } })).toThrow("Unknown");
 });
 
 it("allows only the four explicitly deferred adapters to be excluded", () => {

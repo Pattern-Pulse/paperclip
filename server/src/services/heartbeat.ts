@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { retainUnsavedWorkFolderLease, workFolderSandboxKey } from "./work-folder-retention.js";
 import { prepareSandboxWorkFolders } from "./sandbox-work-folders.js";
+import { bindWarmSandboxWorkspace } from "./sandbox-workspace-binding.js";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
@@ -19362,7 +19363,13 @@ export function heartbeatService(
           };
         }
         if (Object.keys(nextIssuePatch).length > 0) {
-          await issuesSvc.update(issueId, nextIssuePatch);
+          if (warmReusableExecutionWorkspace && !isolatedWorkspacesEnabled) {
+            await bindWarmSandboxWorkspace(db, {
+              companyId: agent.companyId, issueId, runId: run.id, agentId: agent.id, workspaceId: workspace.id,
+            });
+          } else {
+            await issuesSvc.update(issueId, nextIssuePatch);
+          }
           issueExecutionWorkspaceIdForRun = workspace.id;
           issueProjectWorkspaceIdForRun =
             resolvedProjectWorkspaceId ?? issueProjectWorkspaceIdForRun;
