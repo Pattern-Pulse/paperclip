@@ -33,6 +33,7 @@ import {
   runWithRuntimeParent,
   type StartupSpanContext,
 } from "@paperclipai/adapter-utils/acpx-engine/startup-timing";
+import { retainUnsavedWorkFolderLease } from "./work-folder-retention.js";
 import { environmentService } from "./environments.js";
 import { instanceSettingsService } from "./instance-settings.js";
 import { verifyNativeHarnessBackupStamp } from "./native-runtime/native-harness-backup-stamp.js";
@@ -986,6 +987,8 @@ function buildReusableSandboxLeaseScope(input: {
   environmentId: string;
   executionWorkspaceId: string | null;
   agentId: string | null;
+  responsibleUserId: string | null;
+  issueId: string | null;
   adapterType: string | null;
   provider: string;
   config: Record<string, unknown>;
@@ -1000,11 +1003,13 @@ function buildReusableSandboxLeaseScope(input: {
     ? { ...providerMetadata.workspaceSentinel }
     : null;
   return {
-    version: 1,
+    version: 2,
     companyId: input.companyId,
     environmentId: input.environmentId,
     executionWorkspaceId: input.executionWorkspaceId,
     agentId: input.agentId,
+    responsibleUserId: input.responsibleUserId,
+    issueId: input.issueId,
     adapterType,
     provider: input.provider,
     runtimeFingerprint: reusableRuntimeFingerprint({
@@ -1026,6 +1031,8 @@ function reusableSandboxLeaseScopeMatches(input: {
   environmentId: string;
   executionWorkspaceId: string | null;
   agentId: string | null;
+  responsibleUserId: string | null;
+  issueId: string | null;
   adapterType: string | null;
   provider: string;
   config: Record<string, unknown>;
@@ -1037,10 +1044,13 @@ function reusableSandboxLeaseScopeMatches(input: {
   if (!isRecord(scope)) return false;
   const adapterType = input.adapterType ?? null;
   const baseScopeMatches =
+    scope.version === 2 &&
     scope.companyId === input.companyId &&
     scope.environmentId === input.environmentId &&
     scope.executionWorkspaceId === input.executionWorkspaceId &&
     scope.agentId === input.agentId &&
+    scope.responsibleUserId === input.responsibleUserId &&
+    scope.issueId === input.issueId &&
     scope.adapterType === adapterType &&
     scope.provider === input.provider;
   if (!baseScopeMatches) return false;
@@ -1744,6 +1754,9 @@ function createSandboxEnvironmentDriver(
     driver: "sandbox",
 
     async acquireRunLease(input) {
+      const [boundRun] = input.heartbeatRunId ? await db.select({ responsibleUserId: heartbeatRuns.responsibleUserId })
+        .from(heartbeatRuns).where(and(eq(heartbeatRuns.id, input.heartbeatRunId), eq(heartbeatRuns.companyId, input.companyId))) : [];
+      const responsibleUserId = boundRun?.responsibleUserId ?? null;
       const storedParsed = parseEnvironmentDriverConfig(input.environment);
       const parsed = await resolveEnvironmentDriverConfigForRuntime(db, input.companyId, input.environment, {
         issueId: input.issueId,
@@ -1847,6 +1860,8 @@ function createSandboxEnvironmentDriver(
         const reusableExistingLeases = reusableCandidateLeases.filter((lease) =>
           reusableSandboxLeaseScopeMatches({
             lease,
+            responsibleUserId,
+            issueId: input.issueId,
             companyId: input.companyId,
             environmentId: input.environment.id,
             executionWorkspaceId: input.executionWorkspaceId,
@@ -2033,6 +2048,8 @@ function createSandboxEnvironmentDriver(
         });
         const reusableScope = resolvedLeasePolicy === "reuse_by_environment"
           ? buildReusableSandboxLeaseScope({
+              responsibleUserId,
+            issueId: input.issueId,
               companyId: input.companyId,
               environmentId: input.environment.id,
               executionWorkspaceId: input.executionWorkspaceId,
@@ -2201,6 +2218,8 @@ function createSandboxEnvironmentDriver(
       const reusableExistingLeases = reusableCandidateLeases.filter((lease) =>
         reusableSandboxLeaseScopeMatches({
           lease,
+          responsibleUserId,
+          issueId: input.issueId,
           companyId: input.companyId,
           environmentId: input.environment.id,
           executionWorkspaceId: input.executionWorkspaceId,
@@ -2273,6 +2292,8 @@ function createSandboxEnvironmentDriver(
         : "ephemeral";
       const reusableScope = resolvedLeasePolicy === "reuse_by_environment"
         ? buildReusableSandboxLeaseScope({
+            responsibleUserId,
+            issueId: input.issueId,
             companyId: input.companyId,
             environmentId: input.environment.id,
             executionWorkspaceId: input.executionWorkspaceId,
@@ -2384,6 +2405,7 @@ function createSandboxEnvironmentDriver(
     },
 
     async releaseRunLease(input) {
+      if (await retainUnsavedWorkFolderLease(db, input.lease)) return { ...input.lease, status: "retained", expiresAt: null, failureReason: "work_folder_save_required" };
       if (input.status === "expired" && input.lease.leasePolicy === "reuse_by_environment") {
         return await destroyReusableSandboxLease({
           environment: input.environment,
@@ -2438,6 +2460,7 @@ function createSandboxEnvironmentDriver(
     },
 
     async retryPendingSandboxTeardown(input) {
+      if (await retainUnsavedWorkFolderLease(db, input.lease)) throw new Error("Sandbox retains unsaved work folders; recover them before teardown");
       // Resolve the teardown from the immutable orphan lease row, not from the
       // current environment. The row keeps the provider, the provider lease id,
       // and the sandbox config in its metadata. A provider change re-points the
@@ -3064,6 +3087,7 @@ function createSandboxEnvironmentDriver(
     lease: EnvironmentLease;
     failureReason: string;
   }): Promise<EnvironmentLease | null> {
+    if (await retainUnsavedWorkFolderLease(db, input.lease)) return { ...input.lease, status: "retained", expiresAt: null, failureReason: "work_folder_save_required" };
     let cleanupStatus: "success" | "failed" = "success";
     const metadata = input.lease.metadata ?? {};
 
@@ -3715,6 +3739,7 @@ export function environmentRuntimeService(
           if (!environment) continue;
 
           const leaseSnapshot = toEnvironmentLeaseSnapshot(leaseRow);
+          if (await retainUnsavedWorkFolderLease(db, leaseSnapshot)) continue;
           if (
             providerResourceDisposition === "keep_running" &&
             leaseSnapshot.leasePolicy === "reuse_by_environment"

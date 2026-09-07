@@ -3,6 +3,8 @@
 // OTEL_EXPORTER_OTLP_ENDPOINT is set). startServer() awaits
 // instrumentationReady before opening DB connections or constructing the
 // HTTP server, so trace coverage does not depend on incidental timing.
+import { collectWorkFolderGarbage } from "./services/work-folder-garbage.js";
+import { createStorageProviderFromConfig } from "./storage/provider-registry.js";
 import { instrumentationReady, shutdownInstrumentation } from "./instrumentation.js";
 import { sentryReady, shutdownSentry, captureException } from "./sentry.js";
 import { existsSync, readFileSync, rmSync } from "node:fs";
@@ -1097,6 +1099,16 @@ export async function startServer(): Promise<StartedServer> {
     heartbeatSchedulerInterval = setInterval(callback, config.heartbeatSchedulerIntervalMs);
     heartbeatSchedulerInterval?.unref?.();
   };
+  let workFolderCleanupInFlight = false;
+  let nextWorkFolderCleanupAt = 0;
+  const scheduleWorkFolderCleanup = () => {
+    if (heartbeatSchedulerStopped || workFolderCleanupInFlight || Date.now() < nextWorkFolderCleanupAt) return;
+    workFolderCleanupInFlight = true;
+    nextWorkFolderCleanupAt = Date.now() + 180_000;
+    trackHeartbeatSchedulerWork(collectWorkFolderGarbage(db, createStorageProviderFromConfig(config))
+      .catch((err) => logger.error({ err }, "Work folder object cleanup failed; durable deletion journal retained"))
+      .finally(() => { workFolderCleanupInFlight = false; }));
+  };
   const externalObjects = externalObjectService(db as any, {
     pluginWorkerManager,
     enabled: async () => (await instanceSettingsService(db).getExperimental()).enableExternalObjects === true,
@@ -1563,6 +1575,7 @@ export async function startServer(): Promise<StartedServer> {
         scheduleAdapterLoginReaperSweep();
         scheduleSetupTokenReaperSweep();
         scheduleEnvironmentLeaseCleanupSweep();
+      scheduleWorkFolderCleanup();
 
         if (heartbeatSchedulerStopped) return;
         trackHeartbeatSchedulerWork(routines
@@ -1718,6 +1731,7 @@ export async function startServer(): Promise<StartedServer> {
     startHeartbeatSchedulerInterval(() => {
       scheduleExternalObjectRefreshSweep(new Date());
       scheduleEnvironmentLeaseCleanupSweep();
+      scheduleWorkFolderCleanup();
       scheduleGitHubConnectionEventPoll();
       scheduleGitHubConnectionContinuitySweep();
     });

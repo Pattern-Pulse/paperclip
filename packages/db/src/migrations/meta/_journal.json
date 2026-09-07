@@ -1667,6 +1667,34 @@
       "when": 1788557575279,
       "tag": "0239_sturdy_santa_claus",
       "breakpoints": true
+    },
+    {
+      "idx": 240,
+      "version": "7",
+      "when": 1788797570316,
+      "tag": "0240_real_virginia_dare",
+      "breakpoints": true
+    },
+    {
+      "idx": 241,
+      "version": "7",
+      "when": 1788798215713,
+      "tag": "0241_mixed_crystal",
+      "breakpoints": true
+    },
+    {
+      "idx": 242,
+      "version": "7",
+      "when": 1788798605168,
+      "tag": "0242_sudden_bedlam",
+      "breakpoints": true
+    },
+    {
+      "idx": 243,
+      "version": "7",
+      "when": 1788799543754,
+      "tag": "0243_ordinary_lucky_pierre",
+      "breakpoints": true
     }
   ]
 }

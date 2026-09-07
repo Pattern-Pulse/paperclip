@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import { retainUnsavedWorkFolderLease, workFolderSandboxKey } from "./work-folder-retention.js";
+import { prepareSandboxWorkFolders } from "./sandbox-work-folders.js";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
@@ -18034,6 +18036,9 @@ export function heartbeatService(
 
     activeRunExecutions.add(run.id);
     let runScratch: HeartbeatRunScratch | null = null;
+    let sandboxWorkFolders: Awaited<ReturnType<typeof prepareSandboxWorkFolders>> | null = null;
+    let workFolderSaveFailed = false;
+    let workFolderLeaseId: string | null = null;
     let nativeSessionResumeScheduled = false;
     let nativeWorkspaceFinalizeScheduled = false;
     let nativeWorkspaceSync: Awaited<
@@ -19001,8 +19006,8 @@ export function heartbeatService(
         shouldResetTaskSessionForWake(context) || sessionConfigFreshness.reset;
       const sessionResetReason =
         sessionConfigFreshness.reasons.join("; ") || null;
-      const taskSessionForRun = resetTaskSession ? null : taskSession;
-      const previousSessionParams =
+      let taskSessionForRun = resetTaskSession ? null : taskSession;
+      let previousSessionParams =
         explicitResumeSessionParams ??
         (isCanonicalSessionIdForAdapter(
           agent.adapterType,
@@ -19730,6 +19735,31 @@ export function heartbeatService(
       await bindIssueToPersistedExecutionWorkspace(persistedExecutionWorkspace);
       const workspaceRealization = realizationResult.workspaceRealization;
       const executionTarget = realizationResult.executionTarget;
+      if (executionTarget?.kind === "remote" && executionTarget.transport === "sandbox") {
+        // The coordinator owns folder identity, hydration and durability for
+        // both legacy and native dispatch. Local execution never enters here.
+        workFolderSaveFailed = true;
+        workFolderLeaseId = activeEnvironmentLease.lease.id;
+        sandboxWorkFolders = await prepareSandboxWorkFolders({ db, companyId: run.companyId, runId: run.id,
+          agentId: agent.id, responsibleUserId: run.responsibleUserId ?? null,
+          taskId: issueRef?.id ?? null, projectId: issueRef?.projectId ?? null, target: executionTarget,
+          sandboxKey: workFolderSandboxKey(activeEnvironmentLease.lease) });
+        if (sandboxWorkFolders.identityChanged) { taskSessionForRun = null; previousSessionParams = null; }
+        executionTarget.workFolderHome = sandboxWorkFolders.home;
+        executionTarget.remoteCwd = sandboxWorkFolders.primaryRepo;
+        const nextLeaseMetadata = { ...activeEnvironmentLease.lease.metadata, remoteCwd: sandboxWorkFolders.primaryRepo, workFolderHome: sandboxWorkFolders.home };
+        await db.update(environmentLeases).set({ metadata: nextLeaseMetadata, updatedAt: new Date() }).where(eq(environmentLeases.id, activeEnvironmentLease.lease.id));
+        activeEnvironmentLease = { ...activeEnvironmentLease, lease: { ...activeEnvironmentLease.lease, metadata: nextLeaseMetadata } };
+        runtimeConfig = { ...runtimeConfig, env: { ...parseObject(runtimeConfig.env), ...sandboxWorkFolders.env } };
+        context.paperclipWorkFolders = { ...sandboxWorkFolders.manifest, primaryRepo: sandboxWorkFolders.primaryRepo };
+        context.paperclipTaskMarkdown = [readNonEmptyString(context.paperclipTaskMarkdown),
+          "## Sandbox files", `Your starting directory and HOME are ${sandboxWorkFolders.home}.`,
+          "The task/, agent/, user/, and project/ directories contain the files bound to this run. They are writable and save every 180 seconds, plus a final save when the run ends.",
+          `The primary repository is ${sandboxWorkFolders.primaryRepo}. All attached repositories are under ${sandboxWorkFolders.home}/repos/.`,
+          "Use the primary repository for project commands. CLI credentials and caches are separate from shared files.",
+        ].filter(Boolean).join("\n\n");
+        workFolderSaveFailed = false;
+      }
       const remoteExecution = realizationResult.remoteExecution;
       const dispatchResolvedInteractionContinuationWithAtomicGate = async <T>(
         dispatch: (markDispatchStarted: () => void) => Promise<T>,
@@ -19920,7 +19950,7 @@ export function heartbeatService(
           : []),
       ];
       context.paperclipWorkspace = {
-        cwd: executionWorkspace.cwd,
+        cwd: sandboxWorkFolders?.primaryRepo ?? executionWorkspace.cwd,
         source: executionWorkspace.source,
         mode: effectiveExecutionWorkspaceMode,
         strategy: executionWorkspace.strategy,
@@ -19932,12 +19962,16 @@ export function heartbeatService(
         worktreePath: executionWorkspace.worktreePath,
         realization: workspaceRealization,
         agentHome: await (async () => {
+          if (sandboxWorkFolders) return sandboxWorkFolders.env.AGENT_HOME;
           const home = resolveDefaultAgentWorkspaceDir(agent.id);
           await fs.mkdir(home, { recursive: true });
           return home;
         })(),
       };
-      context.paperclipWorkspaces = buildRunWorkspaceHints(resolvedWorkspace);
+      context.paperclipWorkspaces = sandboxWorkFolders ? sandboxWorkFolders.manifest.repositories.map((repo) => ({
+        workspaceId: repo.workspaceId, projectId: sandboxWorkFolders!.manifest.projectId,
+        cwd: `${sandboxWorkFolders!.home}/repos/${repo.name}`,
+      })) : buildRunWorkspaceHints(resolvedWorkspace);
       // Emit exactly one requested-vs-synced observability line for the referenced-project set. A run
       // with no referenced project stays silent, so this adds no noise to the anchor-only default. The
       // per-drop human warning already rides `runtimeWorkspaceWarnings`; this line carries the counts
@@ -20034,6 +20068,11 @@ export function heartbeatService(
         stripPaperclipSessionMetadataFromSessionParams(runtimeSessionParams),
       );
 
+      if (sandboxWorkFolders?.identityChanged) {
+        runtimeSessionIdForAdapter = null;
+        runtimeSessionParamsForAdapter = null;
+        previousSessionDisplayId = null;
+      }
       const sessionCompaction = await evaluateSessionCompaction({
         agent,
         sessionId: previousSessionDisplayId ?? runtimeSessionIdForAdapter,
@@ -20349,7 +20388,7 @@ export function heartbeatService(
           cwd: executionWorkspace.cwd,
         });
         const adapterEnv = Object.fromEntries(
-          Object.entries(parseObject(resolvedConfig.env)).filter(
+          Object.entries({ ...parseObject(resolvedConfig.env), ...sandboxWorkFolders?.env }).filter(
             (entry): entry is [string, string] =>
               typeof entry[0] === "string" && typeof entry[1] === "string",
           ),
@@ -20487,14 +20526,14 @@ export function heartbeatService(
                 actorId: agent.id,
                 immediateRequest: safeWakeCommentContext?.body ?? null,
               });
-          const taskNativeSessionId = readNonEmptyString(
+          const taskNativeSessionId = sandboxWorkFolders?.identityChanged ? null : readNonEmptyString(
             taskSessionDecodedParams?.sessionId,
           );
           // Compatibility for native retry rows created before same-run restart
           // recovery existed. Only an entirely unused replacement row may
           // inherit its source checkpoint; any process/provider evidence on the
           // replacement makes the ownership ambiguous and therefore ineligible.
-          const legacyRetrySource = run.retryOfRunId
+          const legacyRetrySource = !sandboxWorkFolders?.identityChanged && run.retryOfRunId
             ? await db
                 .select({
                   id: heartbeatRuns.id,
@@ -20968,7 +21007,7 @@ export function heartbeatService(
               })
               .onConflictDoNothing();
           });
-          nativeWorkspaceSync = await prepareNativeWorkspaceSync({
+          nativeWorkspaceSync = sandboxWorkFolders ? null : await prepareNativeWorkspaceSync({
             db,
             runId: run.id,
             companyId: agent.companyId,
@@ -21562,6 +21601,12 @@ export function heartbeatService(
           // If recording the barrier itself fails, propagate as a run failure
           // rather than silently leaving dependents stranded behind a missing
           // finalize row.
+          if (sandboxWorkFolders) {
+            workFolderSaveFailed = true;
+            await sandboxWorkFolders.stop();
+            sandboxWorkFolders = null;
+            workFolderSaveFailed = false;
+          }
           if (nativeWorkspaceSync) {
             await nativeWorkspaceSync.restoreWorkspace();
           }
@@ -22770,6 +22815,10 @@ export function heartbeatService(
         }
       }
     } finally {
+      if (sandboxWorkFolders) {
+        try { await sandboxWorkFolders.stop(); workFolderSaveFailed = false; }
+        catch (error) { workFolderSaveFailed = true; logger.error({ err: error, runId: run.id }, "Work folder save failed; retaining sandbox for recovery"); }
+      }
       let latestRun = await getRun(run.id).catch(() => null);
       // Trace capture is debug-only and must settle independently of every
       // provider outcome. Adapter/setup failures used to skip the success-path
@@ -22820,7 +22869,12 @@ export function heartbeatService(
           latestRun?.status,
         );
       if (!nativeSessionResumeScheduled && !nativeWorkspaceFinalizeScheduled) {
-        await releaseEnvironmentLeasesForRun({
+        if (workFolderSaveFailed && workFolderLeaseId) {
+          await retainUnsavedWorkFolderLease(db, { id: workFolderLeaseId, companyId: run.companyId }).catch((error) => {
+            logger.error({ err: error, runId: run.id }, "Could not record work folder retention; lease remains active");
+          });
+        }
+        if (!workFolderSaveFailed) await releaseEnvironmentLeasesForRun({
           runId: run.id,
           companyId: run.companyId,
           agentId: run.agentId,

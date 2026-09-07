@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { externalWorkFolderEnvironment } from "../../work-folder-environment.js";
 
 import {
   githubCredentialEnvironmentKeys,
@@ -40,6 +41,9 @@ export function codexCommandEnvironment(
     "LC_ALL",
   ] as const) {
     const value = source[key];
+    if (value !== undefined) environment[key] = value;
+  }
+  for (const [key, value] of Object.entries(externalWorkFolderEnvironment(source))) {
     if (value !== undefined) environment[key] = value;
   }
   return environment;

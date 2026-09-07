@@ -171,6 +171,7 @@ import { useStreamlinedUiEnabled } from "../hooks/useStreamlinedUiEnabled";
 import { workModeMetaFor } from "../lib/work-mode-meta";
 import { IssueContinuationHandoff } from "../components/IssueContinuationHandoff";
 import { IssueAttachmentsSection } from "../components/IssueAttachmentsSection";
+import { WorkFolderButton } from "@/components/WorkFolderBrowser";
 import { IssueDocumentsSection } from "../components/IssueDocumentsSection";
 import { IssuePlanDecompositionsSection } from "../components/IssuePlanDecompositionsSection";
 import { IssueOutputSection } from "../components/issue-output/IssueOutputSection";
@@ -7468,6 +7469,8 @@ export function IssueDetail() {
             userProfileMap={userProfileMap}
           />
         )}
+
+        <WorkFolderButton owner={{ companyId: issue.companyId, scope: "task", ownerId: issue.id }} label="Task files" />
 
         {taskChatShellEnabled ? null : (
           <IssueOutputSection
