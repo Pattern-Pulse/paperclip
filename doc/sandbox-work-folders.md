@@ -47,9 +47,9 @@ Sandbox runs use the operating-system user's home directory. Both legacy
 adapters and the native runner enter the same host-owned lifecycle before
 dispatch. Local execution keeps its existing workspace and home behavior.
 Legacy ACP proxies use a private host staging directory while agent sessions start
-in the sandbox home. When managed Git launchers are present, the remote agent
-starts without another login-shell profile pass, which could replace the assigned
-PATH before the agent starts. For API-key Codex ACP runs, the adapter writes the explicit
+in the sandbox home. After login-shell initialization, remote agents restore the
+managed Git PATH ahead of paths added by the profile. This preserves both the
+Git launcher and custom runtime initialization. For API-key Codex ACP runs, the adapter writes the explicit
 key to an owner-only login file in the staging copy; host credentials stay unchanged.
 Per-run GitHub launchers declare their own CommonJS package scope so warm runs
 inside ES-module repositories can still execute Git and GitHub CLI commands. Native runner launches carry the validated scoped paths
@@ -158,7 +158,8 @@ warm checkout keeps both its completed setup and reusable caches.
 A complete repository checkpoint includes Git objects, refs, HEAD and index,
 tracked working files, and nonignored untracked files. It excludes dependencies
 and generated ignored caches, Git credentials/configuration, hooks, and private
-runtime state. Checkpoints reject in-progress Git locks and a tree that changes
+runtime state, including nested plugin repositories inside private runner caches.
+Checkpoints reject in-progress Git locks and a tree that changes
 during scanning. The database pointer advances only after all required objects
 and the manifest have been saved. Restores verify ownership and hashes, then
 publish the restored directory atomically. Git origin configuration is recreated

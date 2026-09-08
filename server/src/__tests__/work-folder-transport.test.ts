@@ -63,4 +63,18 @@ describe("sandbox work folder transport with real Node and Git", () => {
     expect(paths).not.toContain(".git/config");
     expect(paths.some((entry) => entry.startsWith("node_modules/"))).toBe(false);
   });
+  it("excludes nested Git repositories in private runner state before validating their trailing slash", async () => {
+    const dir = await root();
+    await exec("git", ["init", dir]);
+    const privateRepo = path.join(dir, ".paperclip-runtime/session/codex-home/.tmp/plugins");
+    await mkdir(privateRepo, { recursive: true });
+    await exec("git", ["init", privateRepo]);
+    await writeFile(path.join(privateRepo, "private-config"), "not durable");
+    await writeFile(path.join(dir, "keep.txt"), "durable work");
+    const listed = await exec("git", ["-C", dir, "ls-files", "--others", "--exclude-standard", "-z"]);
+    expect(listed.stdout).toContain(".paperclip-runtime/session/codex-home/.tmp/plugins/\0");
+    const paths = (await transport.scan(dir, true)).map((entry) => entry.path);
+    expect(paths).toContain("keep.txt");
+    expect(paths.some((entry) => entry.includes(".paperclip-runtime"))).toBe(false);
+  });
 });
