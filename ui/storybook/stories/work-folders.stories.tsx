@@ -31,6 +31,7 @@ const meta = {
       options: [
         "saved",
         "saving",
+        "waiting",
         "failed",
         "olderFailure",
         "multipleFailures",
@@ -100,6 +101,7 @@ export const LargeFilePreview: Story = {
 };
 export const EmptyFolder: Story = { args: { scenario: "empty" } };
 export const Loading: Story = { args: { scenario: "loading" } };
+export const WaitingForFirstSave: Story = { args: { scenario: "waiting" } };
 export const Saving: Story = { args: { scenario: "saving" } };
 export const SaveFailed: Story = { args: { scenario: "failed" } };
 export const SharedFolderWithEarlierFailure: Story = { args: { scope: "agent", scenario: "olderFailure" } };

@@ -75,6 +75,15 @@ export function WorkFolderBrowser({ owner, exampleFiles, readOnly = false, fillH
   const lastSaved = statuses.map((status) => status.lastSavedAt)
     .filter((value): value is string => Boolean(value)).sort().at(-1);
   const lastOperation = filesQuery.data?.lastOperationAt;
+  const saveLabel = mutation.isPending ? "Saving…"
+    : mutation.isError ? "Save failed"
+    : syncQuery.isError || filesQuery.isError ? "Save status unavailable"
+    : !exampleFiles && (syncQuery.isPending || filesQuery.isPending) ? "Loading save status…"
+    : saving ? "Saving…"
+    : failures.length > 0 ? "Run save failed"
+    : !lastSaved && statuses.some((status) => status.active) ? "Waiting for first save"
+    : lastSaved || lastOperation || files.length > 0 ? "Saved"
+    : "No saved files";
   const disabled = mutation.isPending || Boolean(exampleFiles);
   return <Tabs value={trash ? "trash" : "files"} onValueChange={(value) => { setTrash(value === "trash"); setSelectedPath(null); setCheckedFiles(new Set()); }} className={cn("flex min-h-0 flex-col gap-3", fillHeight && "flex-1")}>
     <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -89,7 +98,7 @@ export function WorkFolderBrowser({ owner, exampleFiles, readOnly = false, fillH
       </TabsList>
       {!trash && canManageTrash && checkedPaths.length > 0 && <Button variant="outline" size="sm" disabled={disabled} onClick={() => mutation.mutate({ type: "deleteSelected", paths: checkedPaths })}><Trash2 aria-hidden />Move {checkedPaths.length} {checkedPaths.length === 1 ? "file" : "files"} to trash</Button>}
       {!readOnly && <Button variant="outline" size="sm" disabled={disabled || !statuses.some((status) => status.active)} onClick={() => mutation.mutate({ type: "refresh" })}><RefreshCw aria-hidden />Refresh sandbox</Button>}
-      <span className="text-xs text-muted-foreground" role="status">{saving ? "Saving…" : mutation.isError ? "Save failed" : failures.length > 0 ? "Run save failed" : "Saved"}</span>
+      <span className="text-xs text-muted-foreground" role="status">{saveLabel}</span>
       {lastSaved && <span className="text-xs text-muted-foreground">Last agent save {new Date(lastSaved).toLocaleTimeString()}</span>}
       {lastOperation && (!lastSaved || lastOperation > lastSaved) && <span className="text-xs text-muted-foreground">Files updated {new Date(lastOperation).toLocaleTimeString()}</span>}
     </div>

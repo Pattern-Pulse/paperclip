@@ -79,6 +79,9 @@ are unchanged.
 CLI state is separate from the four shared collections. A change of task,
 agent, responsible user, or project cannot reuse a sandbox with another binding.
 
+The cache inspector shows “Waiting for first save” until an active run has a
+completed checkpoint. Missing or unavailable sync status is never labeled saved.
+
 ## Storage and synchronization
 
 Postgres stores company/owner bindings, paths, executable bits, current object
