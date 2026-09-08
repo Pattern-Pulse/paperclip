@@ -1,3 +1,4 @@
+import { instanceExperimentalSettingsSchema } from "@paperclipai/shared";
 import { useEffect, useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/queryKeys";
@@ -40,7 +41,7 @@ export const workFolderAgent = {
   },
 };
 
-function seed(client: QueryClient) {
+function seed(client: QueryClient, enableCachedTaskFiles: boolean) {
   const company = WORK_FOLDER_COMPANY;
   client.setQueryData(queryKeys.auth.session, storybookAuthSession);
   client.setQueryData(queryKeys.liveRuns(company), []);
@@ -126,6 +127,8 @@ function seed(client: QueryClient) {
     keyboardShortcutsEnabled: false,
   });
   client.setQueryData(queryKeys.instance.experimentalSettings, {
+    ...instanceExperimentalSettingsSchema.parse({}),
+    enableCachedTaskFiles,
     enableIsolatedWorkspaces: true,
     enableManagedSandboxOnly: true,
   });
@@ -140,9 +143,11 @@ function seed(client: QueryClient) {
 /** Mounted only for work-folder stories; resets cache, mutations, and fetch handlers on exit. */
 export function WorkFolderStoryProvider({
   scenario = "saved",
+  enableCachedTaskFiles = false,
   children,
 }: {
   scenario?: WorkFolderScenario;
+  enableCachedTaskFiles?: boolean;
   children: ReactNode;
 }) {
   const [client] = useState(() => {
@@ -152,7 +157,7 @@ export function WorkFolderStoryProvider({
         mutations: { retry: false },
       },
     });
-    seed(value);
+    seed(value, enableCachedTaskFiles);
     return value;
   });
   const [ready, setReady] = useState(false);
@@ -170,6 +175,12 @@ export function WorkFolderStoryProvider({
       const response = await fixture.handle(request);
       if (response) return response;
       const url = new URL(request.url);
+      if (url.pathname === "/api/instance/settings/experimental" && ["GET", "PATCH"].includes(request.method)) {
+        const previous = client.getQueryData(queryKeys.instance.experimentalSettings) ?? {};
+        const settings = request.method === "PATCH" ? { ...previous, ...await request.json() } : previous;
+        client.setQueryData(queryKeys.instance.experimentalSettings, settings);
+        return Response.json(settings);
+      }
       if (url.pathname.startsWith("/api/") && request.method !== "GET") {
         // Incidental page read markers are harmless. Other page mutations are outside this demo.
         if (url.pathname.endsWith("/read"))

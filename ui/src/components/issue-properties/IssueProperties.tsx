@@ -1,3 +1,4 @@
+import { CachedTaskFilesButton } from "@/components/CachedTaskFilesButton";
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { createPortal } from "react-dom";
 import { PROPERTIES_PANE_HEADER_SLOT_ID } from "../PropertiesPanel";
@@ -2697,7 +2698,7 @@ export function IssueProperties({
         </PropertyPicker>
       </PropertySection>
 
-      {workspacePickerEligible || hasWorkspaceRuntimeControls || issue.currentExecutionWorkspace?.branchName || issue.currentExecutionWorkspace?.cwd || issue.executionWorkspaceId ? (
+      {experimentalSettings?.enableCachedTaskFiles || workspacePickerEligible || hasWorkspaceRuntimeControls || issue.currentExecutionWorkspace?.branchName || issue.currentExecutionWorkspace?.cwd || issue.executionWorkspaceId ? (
         <PropertySection title="Workspace" streamlined={streamlinedPropertiesEnabled}>
           {workspacePickerEligible ? (
             <PropertyPicker
@@ -2815,6 +2816,11 @@ export function IssueProperties({
               )}
             </PropertyPicker>
           ) : null}
+          {experimentalSettings?.enableCachedTaskFiles && (
+            <PropertyRow label="Files">
+              <CachedTaskFilesButton key={`${issue.id}:${issue.assigneeAgentId}:${issue.projectId}:${issue.responsibleUserId}:${currentUserId}`} issue={issue} currentUserId={currentUserId} />
+            </PropertyRow>
+          )}
           {showWorkspaceDetailLink && issue.executionWorkspaceId && (
             <PropertyRow label="Workspace">
               <Link

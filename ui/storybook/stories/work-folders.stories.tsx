@@ -19,7 +19,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "Unshipped stored-file browser prototype. Application entry points were removed because saved copies are not the live sandbox filesystem. This Storybook-only review surface uses disposable in-memory data; debug inspection and live sandbox browsing need separate designs.",
+          "Editable stored-file browser prototype using disposable in-memory data. The experimental task inspector reuses this browser in read-only mode. Saved copies are not the live sandbox filesystem.",
       },
     },
   },
@@ -43,7 +43,7 @@ const meta = {
     <WorkFolderStoryProvider key={`${scope}:${scenario}`} scenario={scenario}>
       <div className="mx-auto max-w-5xl">
         <p className="mb-4 text-sm text-muted-foreground">
-          Stored-file prototype — not exposed in the app. These are saved
+          Editable stored-file prototype — editing controls are not exposed in the app. These are saved
           copies, not the live sandbox filesystem.
         </p>
         <WorkFolderBrowser owner={workFolderOwners[scope]} />

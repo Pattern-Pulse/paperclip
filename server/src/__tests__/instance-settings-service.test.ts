@@ -7,6 +7,12 @@ import {
 } from "../services/instance-settings.js";
 
 describe("instance settings service", () => {
+  it("defaults cached task file inspection off and retains explicit saved settings", () => {
+    expect(normalizeExperimentalSettings({}).enableCachedTaskFiles).toBe(false);
+    expect(normalizeExperimentalSettings({ enableCachedTaskFiles: true }).enableCachedTaskFiles).toBe(true);
+    expect(normalizeExperimentalSettings({ enableCachedTaskFiles: false }).enableCachedTaskFiles).toBe(false);
+  });
+
   it("ignores retired experimental flags without resetting current settings", () => {
     expect(normalizeExperimentalSettings({
       enableEnvironments: true,
@@ -17,6 +23,7 @@ describe("instance settings service", () => {
       enableExperimentalFileViewer: true,
       enableBuiltInAgents: true,
       enableGoalsSidebarLink: true,
+      enableCachedTaskFiles: false,
       enableServerInfoDebugView: true,
       enablePaperclipDeveloperMode: true,
       autoRestartDevServerWhenIdle: true,
@@ -45,6 +52,7 @@ describe("instance settings service", () => {
       enableStatusCards: false,
       enableDecisions: false,
       enableGoalsSidebarLink: true,
+      enableCachedTaskFiles: false,
       enableServerInfoDebugView: true,
       enablePaperclipDeveloperMode: true,
       enableSimplifiedEnglishInteractions: false,

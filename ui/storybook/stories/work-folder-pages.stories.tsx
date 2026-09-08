@@ -6,6 +6,7 @@ import { Layout } from "@/components/Layout";
 import { IssueDetail } from "@/pages/IssueDetail";
 import { AgentDetail } from "@/pages/AgentDetail";
 import { ProjectDetail } from "@/pages/ProjectDetail";
+import { InstanceExperimentalSettings } from "@/pages/InstanceExperimentalSettings";
 import { ProfileSettings } from "@/pages/ProfileSettings";
 import { useCompany } from "@/context/CompanyContext";
 import {
@@ -17,13 +18,15 @@ import {
 import { WORK_FOLDER_COMPANY } from "../fixtures/workFolders";
 import type { WorkFolderScope } from "@paperclipai/shared";
 
+type PageScope = WorkFolderScope | "settings";
 const paths = {
+  settings: "/PAP/company/settings/instance/experimental",
   task: `/PAP/issues/${workFolderTask.identifier}`,
   agent: `/PAP/agents/${workFolderAgent.urlKey}`,
   project: `/PAP/projects/${workFolderProject.urlKey}`,
   user: "/PAP/company/settings/instance/profile",
 };
-function Page({ scope }: { scope: WorkFolderScope }) {
+function Page({ scope }: { scope: PageScope }) {
   const { selectedCompanyId, setSelectedCompanyId } = useCompany();
   const location = useLocation();
   const navigate = useNavigate();
@@ -40,6 +43,7 @@ function Page({ scope }: { scope: WorkFolderScope }) {
     <PluginLauncherProvider>
       <Routes>
         <Route path="/:companyPrefix" element={<Layout />}>
+          <Route path="company/settings/instance/experimental" element={<InstanceExperimentalSettings />} />
           <Route path="issues/:issueId" element={<IssueDetail />} />
           <Route path="agents/:agentId/:tab?" element={<AgentDetail />} />
           <Route path="projects/:projectId/:tab?" element={<ProjectDetail />} />
@@ -59,18 +63,18 @@ const meta = {
     docs: {
       description: {
         component:
-          "Current production pages after removing the stored-file entry points. Persisted copies do not represent the live sandbox filesystem. Debug inspection of saved files and live sandbox browsing are deferred features. Page mutations are not simulated.",
+          "Task properties expose cached-file inspection only when enabled in development settings. The inspector previews and downloads saved copies, not the live sandbox filesystem. Other page mutations are not simulated.",
       },
     },
   },
-  args: { scope: "task" },
+  args: { scope: "task", enableCachedTaskFiles: false },
   argTypes: { scope: { control: false } },
-  render: ({ scope }: { scope: WorkFolderScope }) => (
-    <WorkFolderStoryProvider key={scope}>
+  render: ({ scope, enableCachedTaskFiles }: { scope: PageScope; enableCachedTaskFiles: boolean }) => (
+    <WorkFolderStoryProvider key={`${scope}:${enableCachedTaskFiles}`} enableCachedTaskFiles={enableCachedTaskFiles}>
       <Page scope={scope} />
     </WorkFolderStoryProvider>
   ),
-} satisfies Meta<{ scope: WorkFolderScope }>;
+} satisfies Meta<{ scope: PageScope; enableCachedTaskFiles: boolean }>;
 export default meta;
 type Story = StoryObj<typeof meta>;
 export const TaskPage: Story = { args: { scope: "task" } };
@@ -81,3 +85,6 @@ export const MobileTaskPage: Story = {
   args: { scope: "task" },
   globals: { viewport: { value: "mobile" } },
 };
+
+export const TaskPageCachedFiles: Story = { args: { scope: "task", enableCachedTaskFiles: true } };
+export const DevelopmentSettings: Story = { args: { scope: "settings" } };

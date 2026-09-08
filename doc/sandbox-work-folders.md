@@ -132,16 +132,19 @@ directories are not supported by this checkpoint format.
 
 ## API and UI
 
-The task, agent, project, and current-user pages do not expose stored-file
-browsing. The 2026-09-08 design review removed these entry points: durable copies
-can lag behind a running sandbox and do not represent its complete filesystem.
-The persistence and synchronization APIs remain available to the runtime.
+Cached-file inspection is an opt-in development tool. Enable **Allow viewing
+cached task files** in Experimental settings under Paperclip Developer Mode.
+Task properties then show **Files → View cached files** beneath Execution in
+the Workspace section. The dialog previews and downloads the task, project,
+assigned agent, and responsible user's saved collections. Missing bindings are
+empty; private user files are available only to that user. Existing server
+ownership checks apply independently of the visibility setting.
 
-Two separate features are deferred: debug inspection of persisted collections,
-and authorized inspection of the live sandbox filesystem across its task,
-agent, user, project, and repository context. The stored-file browser remains
-only as an unshipped Storybook prototype. It must not be presented as a live
-sandbox view. Page stories show the current pages without Files buttons.
+The inspector is read-only and clearly identifies saved copies that can lag
+behind agent edits. It does not list repositories or the live sandbox disk.
+Agent, project, and profile pages have no standalone stored-file entry points.
+Live sandbox filesystem inspection remains a separate future feature. The
+editable stored-file browser remains in Storybook for design reference.
 
 All routes start at
 `/api/companies/:companyId/work-folders/:scope/:ownerId`:

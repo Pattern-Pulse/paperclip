@@ -29,7 +29,7 @@ function tree(files: WorkFile[]) {
   sort(root.children); return root.children;
 }
 
-export function WorkFolderBrowser({ owner, exampleFiles }: { owner: WorkFolderOwner; exampleFiles?: WorkFile[] }) {
+export function WorkFolderBrowser({ owner, exampleFiles, readOnly = false }: { owner: WorkFolderOwner; exampleFiles?: WorkFile[]; readOnly?: boolean }) {
   const queryClient = useQueryClient();
   const [trash, setTrash] = useState(false);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -48,6 +48,7 @@ export function WorkFolderBrowser({ owner, exampleFiles }: { owner: WorkFolderOw
   const preview = useQuery({ queryKey: [...key, "preview", selected?.path, selected?.sha256],
     queryFn: () => workFoldersApi.preview(owner, selected!), enabled: !exampleFiles && !trash && selected?.kind === "file", retry: false });
   const mutation = useMutation({ mutationFn: async (action: { type: "upload"; files: File[] } | { type: "mkdir" } | { type: "delete"; path: string } | { type: "restore" | "purge"; fileId: string } | { type: "refresh" }) => {
+    if (readOnly) throw new Error("Cached file inspection is read-only.");
     if (action.type === "upload") for (const file of action.files) await workFoldersApi.upload(owner, file, directory ? `${directory}/${file.name}` : file.name, crypto.randomUUID());
     else if (action.type === "mkdir") { await workFoldersApi.operation(owner, { action: "mkdir", path: directory }, crypto.randomUUID()); setExpanded((before) => new Set([...before, directory])); }
     else if (action.type === "delete") await workFoldersApi.operation(owner, { action: "delete", path: action.path }, crypto.randomUUID());
@@ -67,18 +68,18 @@ export function WorkFolderBrowser({ owner, exampleFiles }: { owner: WorkFolderOw
   const disabled = mutation.isPending || Boolean(exampleFiles);
   return <div className="flex min-h-0 flex-col gap-3">
     <div className="flex flex-wrap items-center gap-2">
-      <Button variant="outline" size="sm" disabled={disabled || trash} onClick={() => fileInput.current?.click()}><Upload aria-hidden />Upload</Button>
+      {!readOnly && <><Button variant="outline" size="sm" disabled={disabled || trash} onClick={() => fileInput.current?.click()}><Upload aria-hidden />Upload</Button>
       <input ref={fileInput} className="hidden" aria-label="Upload work files" type="file" multiple onChange={(event) => {
         const chosen = Array.from(event.currentTarget.files ?? []); event.currentTarget.value = "";
         if (chosen.length) mutation.mutate({ type: "upload", files: chosen });
-      }} />
+      }} /></>}
       <Button variant={trash ? "secondary" : "outline"} size="sm" onClick={() => { setTrash(!trash); setSelectedPath(null); }}><Trash2 aria-hidden />{trash ? "Back to files" : "Trash"}</Button>
-      <Button variant="outline" size="sm" disabled={disabled || !statuses.some((status) => status.active)} onClick={() => mutation.mutate({ type: "refresh" })}><RefreshCw aria-hidden />Refresh sandbox</Button>
+      {!readOnly && <Button variant="outline" size="sm" disabled={disabled || !statuses.some((status) => status.active)} onClick={() => mutation.mutate({ type: "refresh" })}><RefreshCw aria-hidden />Refresh sandbox</Button>}
       <span className="text-xs text-muted-foreground" role="status">{saving ? "Saving…" : saveFailed ? "Save failed" : "Saved"}</span>
       {lastSaved && <span className="text-xs text-muted-foreground">Last agent save {new Date(lastSaved).toLocaleTimeString()}</span>}
       {lastOperation && (!lastSaved || lastOperation > lastSaved) && <span className="text-xs text-muted-foreground">Files updated {new Date(lastOperation).toLocaleTimeString()}</span>}
     </div>
-    {!trash && <div className="flex flex-wrap items-end gap-2">
+    {!readOnly && !trash && <div className="flex flex-wrap items-end gap-2">
       <div className="flex-1 space-y-1"><Label htmlFor={directoryId}>Folder path</Label><Input id={directoryId} value={directory} onChange={(event) => setDirectory(event.target.value)} placeholder="Root folder" /></div>
       <Button variant="outline" size="sm" disabled={disabled || !directory} onClick={() => mutation.mutate({ type: "mkdir" })}><FolderPlus aria-hidden />Create folder</Button>
     </div>}
@@ -86,20 +87,20 @@ export function WorkFolderBrowser({ owner, exampleFiles }: { owner: WorkFolderOw
     {failed && <p role="alert" className="text-sm text-destructive">{failed.error}</p>}
     <p className="sr-only" aria-live="polite">{announcement}</p>
     {trash ? <div className="max-h-96 overflow-auto">{files.length === 0 ? <p className="text-sm text-muted-foreground">Trash is empty.</p> : files.map((file) => <div key={file.id} className="flex items-center gap-2 border-b py-2">
-      <span className="min-w-0 flex-1 truncate text-sm">{file.path}</span><Button size="sm" variant="outline" disabled={disabled} onClick={() => mutation.mutate({ type: "restore", fileId: file.id })}><RotateCcw aria-hidden />Restore</Button>
+      <span className="min-w-0 flex-1 truncate text-sm">{file.path}</span>{!readOnly && <><Button size="sm" variant="outline" disabled={disabled} onClick={() => mutation.mutate({ type: "restore", fileId: file.id })}><RotateCcw aria-hidden />Restore</Button>
       <AlertDialog><AlertDialogTrigger asChild><Button size="sm" variant="ghost" disabled={disabled}>Purge…</Button></AlertDialogTrigger>
         <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Permanently delete {file.path}?</AlertDialogTitle>
           <AlertDialogDescription>This deleted copy and its deleted children will no longer be recoverable.</AlertDialogDescription></AlertDialogHeader>
           <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => mutation.mutate({ type: "purge", fileId: file.id })}>Permanently delete</AlertDialogAction></AlertDialogFooter>
-        </AlertDialogContent></AlertDialog>
+        </AlertDialogContent></AlertDialog></>}
     </div>)}</div> : <div className="grid min-h-0 gap-3 md:grid-cols-3">
       <div className="max-h-96 overflow-auto rounded-md border"><FileTree nodes={nodes} selectedFile={selectedPath} expandedDirs={expanded}
         onToggleDir={(filePath) => { setSelectedPath(filePath); setExpanded((before) => { const next = new Set(before); if (next.has(filePath)) next.delete(filePath); else next.add(filePath); return next; }); }}
-        onSelectFile={setSelectedPath} loading={!exampleFiles && filesQuery.isLoading} empty={{ title: "No files yet", description: "Upload files here, or create them during a sandbox run." }} ariaLabel={`${owner.scope} files`} /></div>
+        onSelectFile={setSelectedPath} loading={!exampleFiles && filesQuery.isLoading} empty={{ title: "No files yet", description: readOnly ? "No cached files have been saved for this scope." : "Upload files here, or create them during a sandbox run." }} ariaLabel={`${owner.scope} files`} /></div>
       <div className="flex min-h-0 flex-col gap-2 md:col-span-2">
         {selected && <div className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate text-sm">{selected.path}</span>
           {selected.kind === "file" && !exampleFiles && <Button asChild size="sm" variant="outline"><a href={workFoldersApi.downloadUrl(owner, selected.path)} download><Download aria-hidden />Download</a></Button>}
-          <Button size="sm" variant="outline" disabled={disabled} onClick={() => mutation.mutate({ type: "delete", path: selected.path })}><Trash2 aria-hidden />Delete</Button></div>}
+          {!readOnly && <Button size="sm" variant="outline" disabled={disabled} onClick={() => mutation.mutate({ type: "delete", path: selected.path })}><Trash2 aria-hidden />Delete</Button>}</div>}
         {preview.isLoading ? <p className="text-sm text-muted-foreground">Loading preview…</p> : preview.error ? <p role="alert" className="text-sm text-muted-foreground">{preview.error.message}</p> : preview.data ?
           <div className="flex max-h-96 min-h-0 flex-col overflow-auto rounded-md border"><FileContentViewer content={preview.data} highlightedLine={null} /></div> : <p className="text-sm text-muted-foreground">Select a file to preview it.</p>}
       </div>

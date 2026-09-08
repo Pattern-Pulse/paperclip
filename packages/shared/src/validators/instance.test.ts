@@ -5,6 +5,13 @@ import {
 } from "./instance.js";
 
 describe("instance experimental settings validators", () => {
+  it("defaults cached task file inspection off and accepts opt-in and opt-out patches", () => {
+    expect(instanceExperimentalSettingsSchema.parse({}).enableCachedTaskFiles).toBe(false);
+    for (const enableCachedTaskFiles of [true, false]) {
+      expect(patchInstanceExperimentalSettingsSchema.parse({ enableCachedTaskFiles })).toEqual({ enableCachedTaskFiles });
+    }
+  });
+
   it("defaults the streamlined UI on and accepts an explicit patch", () => {
     expect(instanceExperimentalSettingsSchema.parse({}).enableStreamlinedUi).toBe(true);
     expect(
