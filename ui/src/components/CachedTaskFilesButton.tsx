@@ -30,7 +30,7 @@ export function CachedTaskFilesButton({ issue, currentUserId }: { issue: TaskCon
           </TabsList>
           {folders.map(({ scope, label, ownerId }) => (
             <TabsContent key={scope} value={scope} className="flex min-h-0 flex-col gap-3 overflow-auto">
-              <p className="text-xs text-muted-foreground">Cached copy of $HOME/{scope}/ · Select files to move to trash; restore them from the Trash tab</p>
+              <p className="text-xs text-muted-foreground">Cached sandbox folder: [sandbox home]/{scope}/ · Select files to move to trash; restore them from the Trash tab</p>
               {!ownerId ? (
                 <p className="text-sm text-muted-foreground">No {label.toLowerCase()} is bound to this task. This folder is empty and unbound.</p>
               ) : scope === "user" && ownerId !== currentUserId ? (
