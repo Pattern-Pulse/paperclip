@@ -1539,6 +1539,9 @@ export async function prepareGitHubOperationLaunchers(input: {
   // the managed launchers after startup without loading a host user's profile.
   const profile = `export PATH=${shellQuote(managedPath)}\n`;
   const files: Record<string, string> = Object.fromEntries([
+    // Warm task paths can live inside an ESM repository. These extensionless
+    // launchers use CommonJS regardless of the surrounding project's type.
+    ["package.json", JSON.stringify({ type: "commonjs" })],
     ...["git", "gh"].map((name) => [name, githubLauncherSource()] as const),
     ...[".zshenv", ".zprofile", ".zshrc", ".bash_profile", ".bashrc", ".profile"].map((name) => [name, profile] as const),
   ]);
