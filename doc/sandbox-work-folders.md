@@ -217,6 +217,19 @@ and save feedback in the deployed browser. Record API/runner operations, two act
 short-run flushes, independent task checkouts, identity/privacy boundaries,
 interrupted saves, and recovery without the original sandbox or app volume.
 
+Repository acceptance must also read the private repository through the managed
+Git launcher, for example with `git ls-remote origin HEAD`. Do not count a model's
+PATH changes or credential workarounds as a pass. Native Git credential callbacks
+use the internal API origin, as legacy callbacks do; the public Cloud tenant
+origin requires a browser session.
+
+Native continuation validates the full control-plane journal with the same
+64 MiB bound as the runner transport. Tool output in that journal can exceed
+2 MiB without invalidating its identity. Oversized, malformed, foreign-session,
+and unverifiable state still fail closed and remain recoverable in quarantine.
+The cached-file routes initialize storage once per router after authorization;
+every request still checks current owner access.
+
 Passing acceptance does not authorize a merge or mainline release. Both require
 the user's explicit sign-off.
 

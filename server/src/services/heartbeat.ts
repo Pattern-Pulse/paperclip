@@ -21433,7 +21433,8 @@ export function heartbeatService(
                   runtimeRootDir: path.posix.join(executionTarget.remoteCwd, ".paperclip-runtime", "github", run.id),
                   adapterKey: "native-github",
                   hostApiToken: adapterEnv.PAPERCLIP_GITHUB_BROKER_TOKEN,
-                  hostApiUrl: adapterEnv.PAPERCLIP_GITHUB_BROKER_URL,
+                  // Forward inside this API process. The public tenant origin
+                  // requires a browser session and rejects runtime capabilities.
                   onLog,
                 });
               } catch {

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   access,
+  appendFile,
   mkdir,
   mkdtemp,
   readdir,
@@ -4546,7 +4547,7 @@ describe("runnerd provider runtime wiring", () => {
     }
   });
 
-  it("migrates a suspended prior-run authority only when its persisted execution has the same full session scope", async () => {
+  it.each([0, 5 * 1024 * 1024])("migrates a suspended prior-run authority with %i bytes of journal data only within its full session scope", async (journalBytes) => {
     const stateBase = await mkdtemp(
       join(tmpdir(), "paperclip-prior-run-session-state-"),
     );
@@ -4607,12 +4608,15 @@ describe("runnerd provider runtime wiring", () => {
       await writeFile(
         join(legacyRoot, "control-plane", "control-plane-state.json"),
         JSON.stringify(
-          durableControlPlaneState({
-            runId: priorExecution.binding.runId,
-            normalizedSessionId: priorExecution.session.normalizedSessionId,
-            runnerInstanceId: "runner-prior-run-scope",
-            environmentLeaseId: "lease-prior-run-scope",
-          }),
+          {
+            ...durableControlPlaneState({
+              runId: priorExecution.binding.runId,
+              normalizedSessionId: priorExecution.session.normalizedSessionId,
+              runnerInstanceId: "runner-prior-run-scope",
+              environmentLeaseId: "lease-prior-run-scope",
+            }),
+            journalData: "x".repeat(journalBytes),
+          },
         ),
       );
       await writeFile(
@@ -5371,7 +5375,7 @@ describe("runnerd provider runtime wiring", () => {
     },
   );
 
-  it.each(["missing", "malformed", "unknown_schema", "mismatched"] as const)(
+  it.each(["missing", "malformed", "unknown_schema", "mismatched", "oversized"] as const)(
     "fails closed on %s durable identity in an existing scoped root",
     async (caseName) => {
       const stateBase = await mkdtemp(
@@ -5425,12 +5429,31 @@ describe("runnerd provider runtime wiring", () => {
                 : JSON.stringify(
                     durableControlPlaneState({
                       runId: scopedExecution.binding.runId,
-                      normalizedSessionId: "session-owned-by-another-scope",
-                      runnerInstanceId: "runner-owned-by-another-scope",
-                      environmentLeaseId: "lease-owned-by-another-scope",
+                      normalizedSessionId: caseName === "oversized"
+                        ? scopedExecution.session.normalizedSessionId
+                        : "session-owned-by-another-scope",
+                      runnerInstanceId: `runner-${caseName}-scoped-state`,
+                      environmentLeaseId: scopedExecution.binding.executionWorkspaceId,
                     }),
                   ),
           );
+        }
+        if (caseName === "oversized") {
+          // Valid JSON beyond the bound: without the size guard this exact
+          // identity and ready runner would otherwise be accepted.
+          const padding = " ".repeat(1024 * 1024);
+          for (let i = 0; i < 64; i++) {
+            await appendFile(join(scopedRoot, "control-plane", "control-plane-state.json"), padding);
+          }
+          await mkdir(join(scopedRoot, "runner"), { recursive: true });
+          await writeFile(join(scopedRoot, "runner", "runner-state.json"), JSON.stringify(
+            durableRunnerState({
+              runId: scopedExecution.binding.runId,
+              normalizedSessionId: scopedExecution.session.normalizedSessionId,
+              runnerInstanceId: `runner-${caseName}-scoped-state`,
+              environmentLeaseId: scopedExecution.binding.executionWorkspaceId,
+            }, "ready"),
+          ));
         }
         state.createBackend.mockClear();
         state.createTransport.mockClear();

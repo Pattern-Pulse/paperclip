@@ -22,8 +22,10 @@ const querySchema = z.object({ path: z.string().optional(), trash: z.enum(["true
 
 export function workFolderRoutes(db: Db, provider?: StorageProvider) {
   const router = Router();
-  // Resolve lazily: route registration and tests need not initialize cloud credentials.
-  const service = () => workFolderService(db, provider ?? createStorageProviderFromConfig(loadConfig()));
+  // Resolve once, lazily after authorization. Loading config probes the host
+  // synchronously; repeating that for every file poll stalls unrelated requests.
+  let storage = provider;
+  const service = () => workFolderService(db, storage ??= createStorageProviderFromConfig(loadConfig()));
   const base = WORK_FOLDER_ROUTE_PATH;
   router.use(base, async (req, _res, next) => {
     const owner = ownerSchema.parse(req.params);
