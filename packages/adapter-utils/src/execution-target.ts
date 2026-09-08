@@ -441,6 +441,15 @@ export function adapterExecutionTargetUsesManagedHome(
   return target?.kind === "remote" && target.transport === "sandbox";
 }
 
+/** Resolve the sandbox home without replacing a host-bound work-folder home. */
+export function adapterExecutionTargetManagedHomeDir(
+  target: AdapterExecutionTarget | null | undefined,
+  runtimeRootDir: string | null | undefined,
+): string | null {
+  if (target?.kind !== "remote" || target.transport !== "sandbox") return null;
+  return target.workFolderHome ?? runtimeRootDir ?? null;
+}
+
 /**
  * Read the per-run duplex bridge kill switch off a target. Only a sandbox
  * target with `enableSandboxDuplexBridge` set to `true` returns `true`. Every

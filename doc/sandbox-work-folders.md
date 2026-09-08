@@ -72,6 +72,10 @@ uploads remain unchanged. Task plans and documents are not materialized.
 The agent starts in `$HOME`. `PAPERCLIP_PRIMARY_REPO` and the workspace context
 identify the repository for project commands. `AGENT_HOME` and
 `PAPERCLIP_{TASK,AGENT,USER,PROJECT,REPOS}_DIR` expose the bound directories.
+Legacy adapters use the host-bound sandbox home for both CLI launch and skill
+discovery; a private per-run runtime directory must not override it. CLI-specific
+configuration remains separately staged beneath that home. Local and SSH homes
+are unchanged.
 CLI state is separate from the four shared collections. A change of task,
 agent, responsible user, or project cannot reuse a sandbox with another binding.
 
