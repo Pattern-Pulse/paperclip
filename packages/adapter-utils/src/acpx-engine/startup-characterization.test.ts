@@ -533,6 +533,20 @@ describe("ACPX engine startup characterization", () => {
       expect(sessionInputs[0]?.cwd).toBe(remoteCwd);
     });
 
+    it("preserves the Codex tool environment for work-folder sandboxes without changing other features", async () => {
+      const { stateDir, executionTarget, remoteCwd } = await setupRemoteSandbox();
+      const { meta } = await runExecutor({
+        agent: "codex", stateDir, cwd: remoteCwd,
+        env: { CODEX_CONFIG: JSON.stringify({ features: { shell_snapshot: true, existing_feature: true } }) },
+      }, {
+        authToken: "real-run-jwt",
+        executionTarget: { ...executionTarget, workFolderHome: remoteCwd },
+      });
+      expect(JSON.parse(String((meta[0]?.env as Record<string, string>).CODEX_CONFIG))).toEqual({
+        allow_login_shell: false, features: { shell_snapshot: false, existing_feature: true },
+      });
+    });
+
     it("keeps sandbox work folders remote while spawning the ACP proxy on the host", async () => {
       const { root, stateDir, executionTarget } = await setupRemoteSandbox();
       const home = path.join(root, "sandbox-home");

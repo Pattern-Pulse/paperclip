@@ -197,6 +197,9 @@ export async function prepareSandboxWorkFolders(input: {
       if (entry.kind === "directory") await transport.mkdir(paths[scope]!, entry.path);
       else {
         const result = await svc.content(folder, entry.path);
+        // A shared file can change after listing. Validate and baseline the
+        // version opened by content(), whose metadata and stream belong together.
+        Object.assign(entry, { byteSize: result.file.byteSize, sha256: result.file.sha256, executable: result.file.executable });
         try { await transport.write(paths[scope]!, staging, entry, result.stream); } finally { result.stream.destroy(); }
       }
     }

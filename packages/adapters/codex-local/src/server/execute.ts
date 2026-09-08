@@ -1206,6 +1206,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         {
           resumeSessionId,
           skipGitRepoCheck: executionTargetIsSandbox,
+          preserveSandboxEnvironment: executionTargetIsSandbox && Boolean(runtimeExecutionTarget.workFolderHome),
         },
       );
       const args = execArgs.args;

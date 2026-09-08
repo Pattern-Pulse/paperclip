@@ -390,6 +390,10 @@ export async function prepareAcpxRuntimeSandbox(input: {
     await writePrivateFile(
       join(agentHomeDirectory, "config.toml"),
       [
+        // The host initialized this environment before launching Codex. Tool
+        // login shells would replace its managed Git PATH with image defaults.
+        ...(externalWorkFolderEnvironment(input.environment ?? {}).HOME
+          ? ["allow_login_shell = false", ""] : []),
         // Codex shell snapshots serialize the provider process environment.
         // The ACPX sidecar receives a short-lived managed credential only so
         // it can authenticate the provider; that value must never become

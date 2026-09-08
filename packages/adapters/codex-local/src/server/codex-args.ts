@@ -36,6 +36,7 @@ export function buildCodexExecArgs(
   options: {
     resumeSessionId?: string | null;
     skipGitRepoCheck?: boolean;
+    preserveSandboxEnvironment?: boolean;
   } = {},
 ): BuildCodexExecArgsResult {
   const record = asRecord(config);
@@ -72,6 +73,9 @@ export function buildCodexExecArgs(
     args.push("-c", 'service_tier="fast"', "-c", "features.fast_mode=true");
   }
   if (extraArgs.length > 0) args.push(...extraArgs);
+  if (options.preserveSandboxEnvironment) {
+    args.push("-c", "allow_login_shell=false", "-c", "features.shell_snapshot=false");
+  }
   if (options.resumeSessionId) args.push("resume", options.resumeSessionId, "-");
   else args.push("-");
 

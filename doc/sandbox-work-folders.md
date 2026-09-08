@@ -85,6 +85,10 @@ Legacy adapters use the host-bound sandbox home for both CLI launch and skill
 discovery; a private per-run runtime directory must not override it. CLI-specific
 configuration remains separately staged beneath that home. Local and SSH homes
 are unchanged.
+Sandbox Codex tool commands preserve the environment initialized by the adapter:
+login-shell execution and shell snapshots are disabled so image profiles cannot
+replace the managed Git PATH. This applies to CLI and ACP execution in both
+runner generations; local execution keeps its existing settings.
 CLI state is separate from the four shared collections. A change of task,
 agent, responsible user, or project cannot reuse a sandbox with another binding.
 
@@ -105,6 +109,10 @@ Startup hydrates only the four bound collections. A warm startup first saves
 uncheckpointed local changes and then downloads changed incoming files. There
 is no background incoming refresh while an agent edits. Explicit refresh is
 queued until the run stops, after a successful final flush.
+If another writer changes a shared file between listing and download, incoming
+transfer uses the downloaded version's size, hash, and executable bit. Its sync
+baseline records those same bytes, so an unchanged copy cannot overwrite a later
+shared edit.
 
 Outgoing checkpoints run every **180 seconds**, with at most one in flight,
 and a final flush when execution stops. File signatures include content and

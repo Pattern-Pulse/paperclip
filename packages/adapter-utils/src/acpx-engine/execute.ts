@@ -1376,9 +1376,10 @@ function buildCodexStartupConfig(input: {
   requestedModel: string;
   requestedThinkingEffort: string;
   fastMode: boolean;
+  preserveSandboxEnvironment: boolean;
 }): { value: string | null; invalidExistingConfig: boolean } {
   const hasRuntimeConfig = Boolean(
-    input.requestedModel || input.requestedThinkingEffort || input.fastMode,
+    input.requestedModel || input.requestedThinkingEffort || input.fastMode || input.preserveSandboxEnvironment,
   );
   if (!hasRuntimeConfig) return { value: null, invalidExistingConfig: false };
 
@@ -1400,12 +1401,18 @@ function buildCodexStartupConfig(input: {
       ...(input.requestedThinkingEffort
         ? { model_reasoning_effort: input.requestedThinkingEffort }
         : {}),
+      ...(input.preserveSandboxEnvironment ? { allow_login_shell: false } : {}),
       ...(input.fastMode
         ? {
             service_tier: "fast",
+          }
+        : {}),
+      ...(input.fastMode || input.preserveSandboxEnvironment
+        ? {
             features: {
               ...parseObject(existing.features),
-              fast_mode: true,
+              ...(input.fastMode ? { fast_mode: true } : {}),
+              ...(input.preserveSandboxEnvironment ? { shell_snapshot: false } : {}),
             },
           }
         : {}),
@@ -1930,6 +1937,9 @@ async function buildRuntime(input: {
       requestedModel,
       requestedThinkingEffort,
       fastMode,
+      // The runtime already initialized its login environment. Tool login
+      // shells must not replace the run's managed Git PATH with image defaults.
+      preserveSandboxEnvironment: Boolean(workFolderHome),
     });
     if (codexStartupConfig.invalidExistingConfig) {
       await input.ctx.onLog(

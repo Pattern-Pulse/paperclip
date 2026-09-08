@@ -137,6 +137,8 @@ export function createIsolatedCodexAppServerArgs(
     ...(externalRunnerSandbox
       ? [
           "-c",
+          "allow_login_shell=false",
+          "-c",
           `permissions.${CODEX_EXTERNAL_SANDBOX_PERMISSION_PROFILE}.filesystem={":root"="write"}`,
           "-c",
           `permissions.${CODEX_EXTERNAL_SANDBOX_PERMISSION_PROFILE}.network.enabled=true`,

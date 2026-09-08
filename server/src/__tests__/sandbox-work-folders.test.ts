@@ -13,6 +13,7 @@ import { bindWarmSandboxWorkspace } from "../services/sandbox-workspace-binding.
 import { retainUnsavedWorkFolderLease, workFolderSandboxKey } from "../services/work-folder-retention.js";
 import * as activityLog from "../services/activity-log.js";
 import { workFolderService } from "../services/work-folders.js";
+import * as workFolderServices from "../services/work-folders.js";
 import { collectWorkFolderGarbage } from "../services/work-folder-garbage.js";
 import { localTestWorkFolderRunner } from "./helpers/work-folder-runner.js";
 const exec = promisify(execFile);
@@ -106,6 +107,41 @@ describe("shared sandbox work-folder lifecycle", () => {
         runner: { execute: (input) => localTestWorkFolderRunner.execute({ ...input, env: { ...input.env, HOME: home } }) } } });
     active.push(run); return run;
   }
+  it("uses downloaded metadata when a shared file changes after the startup listing", async () => {
+    const svc = workFolderService(db, storage);
+    const folder = await svc.ensure({ companyId, scope: "project", ownerId: projectId });
+    const filePath = "startup-concurrent.txt";
+    await svc.write(folder, { path: filePath, body: Buffer.from("old"), operationId: randomUUID() });
+    const createService = workFolderServices.workFolderService;
+    let replaced = false;
+    const factory = vi.spyOn(workFolderServices, "workFolderService").mockImplementation((...args) => {
+      const service = createService(...args);
+      return { ...service, list: async (...listArgs) => {
+        const listing = await service.list(...listArgs);
+        if (listArgs[0].id === folder.id && !replaced) {
+          replaced = true;
+          await svc.write(folder, { path: filePath, body: Buffer.from("new content with a different size"),
+            executable: true, operationId: randomUUID() });
+        }
+        return listing;
+      } };
+    });
+    let run: Awaited<ReturnType<typeof prepare>>;
+    try { run = await prepare(path.join(root, "startup-concurrent"), randomUUID()); }
+    finally { factory.mockRestore(); }
+    expect(replaced).toBe(true);
+    expect(await fs.readFile(path.join(run.home, "project", filePath), "utf8")).toBe("new content with a different size");
+    expect((await fs.stat(path.join(run.home, "project", filePath))).mode & 0o111).not.toBe(0);
+    // The baseline must describe the bytes actually received. An unchanged
+    // sandbox must not overwrite a still newer shared edit during final flush.
+    await svc.write(folder, { path: filePath, body: Buffer.from("another writer"), operationId: randomUUID() });
+    await run.stop(); active.splice(active.indexOf(run), 1);
+    const content = await svc.content(folder, filePath);
+    let text = "";
+    for await (const chunk of content.stream) text += chunk.toString();
+    expect(text).toBe("another writer");
+  }, 120_000);
+
   it("retains unaudited edits and retries without misreporting a completed checkpoint", async () => {
     const run = await prepare(path.join(root, "activity-failure"), randomUUID());
     await run.flush();

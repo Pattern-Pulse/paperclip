@@ -34,6 +34,21 @@ afterEach(async () => {
 });
 
 describe("ACPX runtime sandbox", () => {
+  it("preserves the host-prepared tool environment in an external work-folder sandbox", async () => {
+    const fixture = await sandboxFixture("codex");
+    const home = join(fixture.root, "home");
+    const sandbox = await prepareAcpxRuntimeSandbox({
+      binding: fixture.binding, agent: "codex",
+      environment: {
+        HOME: home, PAPERCLIP_RUNNER_EXTERNAL_SANDBOX: "1",
+        ...Object.fromEntries(["task", "agent", "user", "project", "repos"].map((scope) =>
+          [`PAPERCLIP_${scope.toUpperCase()}_DIR`, join(home, scope)])),
+      },
+    });
+    expect(await readFile(join(sandbox.agentHomeDirectory, "config.toml"), "utf8"))
+      .toBe("allow_login_shell = false\n\n[features]\nshell_snapshot = false\n");
+  });
+
   it.each([
     ["pi", "OPENROUTER_API_KEY", "pi-home"],
     ["claude", "ANTHROPIC_API_KEY", "claude-home"],
