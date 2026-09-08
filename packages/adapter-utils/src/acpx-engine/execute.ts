@@ -22,6 +22,7 @@ import {
   prepareAdapterExecutionTargetRuntime,
   readAdapterExecutionTarget,
   resolveAdapterExecutionTargetTimeout,
+  resolveAdapterExecutionTargetCwd,
   resolveReferencedSourceIgnore,
   runAdapterExecutionTargetShellCommand,
   startAdapterExecutionTargetPaperclipBridge,
@@ -1698,9 +1699,21 @@ async function buildRuntime(input: {
   const workspaceWorktreePath = asString(workspaceContext.worktreePath, "");
   const agentHome = asString(workspaceContext.agentHome, "");
   const configuredCwd = asString(config.cwd, "");
+  const executionTarget = readAdapterExecutionTarget({
+    executionTarget: input.ctx.executionTarget,
+    legacyRemoteExecution: input.ctx.executionTransport?.remoteExecution,
+  });
+  const stateDir = path.resolve(asString(config.stateDir, "") || defaultStateDir(agent.companyId, agent.id));
+  const workFolderHome = executionTarget?.kind === "remote" && executionTarget.transport === "sandbox"
+    ? executionTarget.workFolderHome
+    : undefined;
   const useConfiguredInsteadOfAgentHome = workspaceSource === "agent_home" && configuredCwd.length > 0;
   const effectiveWorkspaceCwd = useConfiguredInsteadOfAgentHome ? "" : workspaceCwd;
-  const cwd = effectiveWorkspaceCwd || configuredCwd || process.cwd();
+  // Scoped workspaces exist only in the sandbox. The ACP proxy and staging
+  // metadata need a host directory; never materialize the remote repo on it.
+  const cwd = workFolderHome
+    ? path.join(stateDir, "work-folder-proxy")
+    : effectiveWorkspaceCwd || configuredCwd || process.cwd();
   // Referenced (additional) projects to stage into the sandbox alongside the
   // anchor workspace, read from the workspace realization record. The list is
   // empty unless run prep resolved referenced projects — gated upstream by the
@@ -1771,10 +1784,7 @@ async function buildRuntime(input: {
         (value): value is Record<string, unknown> => typeof value === "object" && value !== null,
       )
     : [];
-  const executionTarget = readAdapterExecutionTarget({
-    executionTarget: input.ctx.executionTarget,
-    legacyRemoteExecution: input.ctx.executionTransport?.remoteExecution,
-  });
+
   const remoteExecutionIdentity = adapterExecutionTargetSessionIdentity(executionTarget);
   const effectiveExecutionCwd =
     remoteExecutionIdentity && typeof remoteExecutionIdentity.remoteCwd === "string"
@@ -1838,7 +1848,6 @@ async function buildRuntime(input: {
     asNumber(config.timeoutSec, DEFAULT_ACP_ENGINE_TIMEOUT_SEC),
   );
   const timeoutSec = timeoutResolution.timeoutSec;
-  const stateDir = path.resolve(asString(config.stateDir, "") || defaultStateDir(agent.companyId, agent.id));
   await fs.mkdir(stateDir, { recursive: true });
 
   const envConfig = parseObject(config.env);
@@ -2061,7 +2070,7 @@ async function buildRuntime(input: {
   // diverge from the cwd that fed the fingerprint.
   const sessionCwd =
     useRemoteProcessSession && executionTarget?.kind === "remote"
-      ? executionTarget.remoteCwd
+      ? resolveAdapterExecutionTargetCwd(executionTarget, undefined, cwd)
       : cwd;
   // The 17 fields the session fingerprint hashes. Company, agent, and task
   // identifiers are NOT here; they scope the outer session key only (see

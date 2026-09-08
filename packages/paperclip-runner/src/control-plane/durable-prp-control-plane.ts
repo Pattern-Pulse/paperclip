@@ -28,6 +28,7 @@ import { dirname, resolve } from "node:path";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
+import { externalWorkFolderEnvironment } from "../work-folder-environment.js";
 import { githubCredentialEnvironment } from "../github-credential-environment.js";
 import {
   validatePrpEvent,
@@ -2060,7 +2061,7 @@ function runnerEnvironment(
       const value = explicitSource[key];
       if (value !== undefined) environment[key] = value;
     }
-    Object.assign(environment, githubCredentialEnvironment(explicitSource));
+    Object.assign(environment, githubCredentialEnvironment(explicitSource), externalWorkFolderEnvironment(explicitSource));
   }
   return environment;
 }

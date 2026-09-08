@@ -41,6 +41,9 @@ links before locating their runtime so task-local launch paths remain valid.
 Sandbox runs use the operating-system user's home directory. Both legacy
 adapters and the native runner enter the same host-owned lifecycle before
 dispatch. Local execution keeps its existing workspace and home behavior.
+Legacy ACP proxies use a private host staging directory while agent sessions start
+in the sandbox home. Native runner launches carry the validated scoped paths
+through runnerd to ACPX; CLI configuration remains in its private runtime directories.
 Warm sandbox task bindings persist independently of the experimental isolated
 workspace setting. Only the active host run can establish that binding; the
 setting still controls user-configurable worktree operations.

@@ -487,6 +487,30 @@ describe("ACPX engine startup characterization", () => {
       expect(sessionInputs[0]?.cwd).toBe(remoteCwd);
     });
 
+    it("keeps sandbox work folders remote while spawning the ACP proxy on the host", async () => {
+      const { root, stateDir, executionTarget } = await setupRemoteSandbox();
+      const home = path.join(root, "sandbox-home");
+      const primary = path.join(home, "repos", "primary");
+      await fs.mkdir(primary, { recursive: true });
+      await fs.writeFile(path.join(primary, "keep.txt"), "sandbox work");
+      const mkdir = vi.spyOn(fs, "mkdir");
+      const { sessionInputs, runtimeOptions } = await runExecutor(
+        { agent: "custom", agentCommand: "node ./fake-acp.js", stateDir, cwd: primary },
+        {
+          authToken: "real-run-jwt",
+          context: { paperclipWorkspace: { cwd: primary, source: "project" } },
+          executionTarget: { ...executionTarget, remoteCwd: primary, workFolderHome: home },
+        },
+      );
+      expect(mkdir.mock.calls.some(([directory]) => directory === primary)).toBe(false);
+      expect(sessionInputs[0]?.cwd).toBe(home);
+      expect(runtimeOptions[0]?.spawnCwd).toBe(path.join(stateDir, "work-folder-proxy"));
+      await expect(fs.readFile(path.join(primary, "keep.txt"), "utf8")).resolves.toBe("sandbox work");
+      expect(vi.mocked(prepareAdapterExecutionTargetRuntime).mock.calls[0]![0].workspaceLocalDir)
+        .toBe(path.join(stateDir, "work-folder-proxy"));
+      mkdir.mockRestore();
+    });
+
     it("threads a managed-home asset through the same seam after the workspace", async () => {
       const { root, stateDir, localCwd, executionTarget } = await setupRemoteSandbox();
       const managedHomeDir = path.join(root, "managed-home");
