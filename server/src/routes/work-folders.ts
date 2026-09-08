@@ -87,8 +87,8 @@ export function workFolderRoutes(db: Db, provider?: StorageProvider) {
         sql`${workFolderRuns.manifest}->'folders'->>${owner.scope} = ${folder.id}`))
       .orderBy(desc(workFolderRuns.updatedAt)).limit(100);
     const isActive = (status: string) => status === "running" || status === "queued";
-    const latestCompletedSave = rows.filter(({ folderRun, status }) =>
-      !isActive(status) && folderRun.state === "saved" && folderRun.lastSavedAt !== null)
+    const latestCheckpoint = rows.filter(({ folderRun, status }) =>
+      !isActive(status) && folderRun.lastSavedAt !== null)
       .sort((a, b) => b.folderRun.lastSavedAt!.getTime() - a.folderRun.lastSavedAt!.getTime())[0];
     const projectStatus = ({ folderRun: row, status }: typeof rows[number]) => {
       const active = isActive(status);
@@ -102,13 +102,13 @@ export function workFolderRoutes(db: Db, provider?: StorageProvider) {
       const row = entry.folderRun;
       if (leases.has(row.manifest.sandboxKey)) return [];
       leases.add(row.manifest.sandboxKey);
-      if (!isActive(entry.status) && row.state === "saved" && row.runId !== latestCompletedSave?.folderRun.runId) return [];
+      if (!isActive(entry.status) && row.state === "saved" && row.runId !== latestCheckpoint?.folderRun.runId) return [];
       return [projectStatus(entry)];
     });
     // A failed replacement or later run must not erase the last successful
     // checkpoint, including when both runs share the same physical sandbox.
-    if (latestCompletedSave && !statuses.some((status) => status.runId === latestCompletedSave.folderRun.runId)) {
-      statuses.push(projectStatus(latestCompletedSave));
+    if (latestCheckpoint && !statuses.some((status) => status.runId === latestCheckpoint.folderRun.runId)) {
+      statuses.push(projectStatus(latestCheckpoint));
     }
     res.json(statuses);
   });

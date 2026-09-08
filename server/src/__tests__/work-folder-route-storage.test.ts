@@ -41,11 +41,14 @@ it("initializes storage only after access succeeds and reuses it while checking 
   expect(mocks.list).toHaveBeenCalledTimes(2);
 });
 
-it.each(["same-sandbox", "replacement-sandbox"])("keeps the last successful save visible after an interrupted run on %s", async (sandboxKey) => {
+it.each([
+  ["same-sandbox", "saved"], ["replacement-sandbox", "saved"],
+  ["same-sandbox", "failed"], ["replacement-sandbox", "failed"],
+])("keeps the last successful checkpoint visible after an interrupted run on %s (prior state %s)", async (sandboxKey, priorState) => {
   const oldSave = {
     folderRun: { runId: "saved-run", manifest: { agentId: "agent", sandboxKey: "same-sandbox" },
-      state: "saved", lastSavedAt: new Date("2026-09-08T12:00:00Z"), error: null, refreshRequested: false },
-    status: "succeeded",
+      state: priorState, lastSavedAt: new Date("2026-09-08T12:00:00Z"), error: null, refreshRequested: false },
+    status: priorState === "failed" ? "failed" : "succeeded",
   };
   const interrupted = {
     folderRun: { runId: "interrupted-run", manifest: { agentId: "agent", sandboxKey },
@@ -60,6 +63,6 @@ it.each(["same-sandbox", "replacement-sandbox"])("keeps the last successful save
   expect(response.body).toEqual([
     expect.objectContaining({ runId: "interrupted-run", state: "failed", active: false,
       error: "Run ended before its final file save completed.", lastSavedAt: null }),
-    expect.objectContaining({ runId: "saved-run", state: "saved", lastSavedAt: "2026-09-08T12:00:00.000Z" }),
+    expect.objectContaining({ runId: "saved-run", state: priorState, lastSavedAt: "2026-09-08T12:00:00.000Z" }),
   ]);
 });
