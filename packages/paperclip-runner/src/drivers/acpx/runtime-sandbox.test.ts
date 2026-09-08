@@ -53,6 +53,8 @@ describe("ACPX runtime sandbox", () => {
           PAPERCLIP_NATIVE_MCP_URL:
             "https://mcp.example.test/connect?ticket=secret",
           PAPERCLIP_NATIVE_MCP_TOKEN: "native-secret",
+          PAPERCLIP_GITHUB_BROKER_TOKEN: "github-secret",
+          PAPERCLIP_PI_TOOL_BRIDGE_TOKEN: "untrusted-bridge-secret",
         },
       });
 
@@ -75,6 +77,9 @@ describe("ACPX runtime sandbox", () => {
       );
       expect(Object.isFrozen(sandbox.launchEnvironment)).toBe(true);
       expect(sandbox.persistedEnvironment[credentialName]).toBeUndefined();
+      expect(sandbox.launchEnvironment.PAPERCLIP_GITHUB_BROKER_TOKEN).toBe("github-secret");
+      expect(sandbox.persistedEnvironment.PAPERCLIP_GITHUB_BROKER_TOKEN).toBeUndefined();
+      expect(sandbox.launchEnvironment.PAPERCLIP_PI_TOOL_BRIDGE_TOKEN).toBeUndefined();
       expect(sandbox.persistedEnvironment.HTTPS_PROXY).toBeUndefined();
       expect(
         sandbox.persistedEnvironment.PAPERCLIP_NATIVE_MCP_URL,
@@ -109,6 +114,14 @@ describe("ACPX runtime sandbox", () => {
         );
       }
       if (agent === "pi") {
+        const extensionPath = join(sandbox.agentHomeDirectory, "extensions", "paperclip-runner-tools.js");
+        const extension = await readFile(extensionPath, "utf8");
+        expect(extension).toContain("pi.registerTool");
+        expect(extension).not.toContain("github-secret");
+        expect(extension).not.toContain("untrusted-bridge-secret");
+        if (process.platform !== "win32") {
+          expect((await stat(extensionPath)).mode & 0o777).toBe(0o600);
+        }
         await expect(
           readFile(join(sandbox.agentHomeDirectory, "settings.json"), "utf8"),
         ).resolves.toContain('"defaultProjectTrust":"never"');

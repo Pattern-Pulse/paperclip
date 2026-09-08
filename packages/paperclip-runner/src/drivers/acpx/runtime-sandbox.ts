@@ -28,6 +28,7 @@ import {
   resolve,
 } from "node:path";
 
+import { PI_RUNNER_TOOL_EXTENSION } from "./pi-tool-extension.js";
 import { createSanitizedAcpxSpawnInput } from "./environment.js";
 import type { QualifiedAcpxAgent } from "./qualified-profiles.js";
 import {
@@ -368,6 +369,14 @@ export async function prepareAcpxRuntimeSandbox(input: {
     `${input.binding.workspacePath}\n`,
   );
   if (input.agent === "pi") {
+    const extensionsDirectory = await ensurePrivateDirectory(
+      join(agentHomeDirectory, "extensions"),
+      agentHomeDirectory,
+    );
+    await writePrivateFile(
+      join(extensionsDirectory, "paperclip-runner-tools.js"),
+      PI_RUNNER_TOOL_EXTENSION,
+    );
     await writePrivateFile(
       join(agentHomeDirectory, "settings.json"),
       `${JSON.stringify({
