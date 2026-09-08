@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Label } from "@/components/ui/label";
+import { Link } from "@/lib/router";
 
 function tree(files: WorkFile[]) {
   const root: FileTreeNode = { name: "", path: "", kind: "dir", children: [] };
@@ -65,7 +66,7 @@ export function WorkFolderBrowser({ owner, exampleFiles, readOnly = false, fillH
     }
     else if (action.type === "restore" || action.type === "purge") await workFoldersApi.operation(owner, { action: action.type, fileId: action.fileId }, crypto.randomUUID());
     else for (const run of (syncQuery.data ?? []).filter((run) => run.active)) await workFoldersApi.refresh(owner, run.runId);
-  }, onSuccess: async (_data, action) => {
+  }, onMutate: () => setAnnouncement(""), onSuccess: async (_data, action) => {
     setAnnouncement(action.type === "refresh" ? "Refresh requested for the next safe run boundary." : "Files saved.");
   }, onSettled: () => queryClient.invalidateQueries({ queryKey: key }) });
   const statuses = syncQuery.data ?? [];
@@ -74,7 +75,6 @@ export function WorkFolderBrowser({ owner, exampleFiles, readOnly = false, fillH
   const lastSaved = statuses.map((status) => status.lastSavedAt)
     .filter((value): value is string => Boolean(value)).sort().at(-1);
   const lastOperation = filesQuery.data?.lastOperationAt;
-  const saveFailed = Boolean(failed) || mutation.isError;
   const disabled = mutation.isPending || Boolean(exampleFiles);
   return <Tabs value={trash ? "trash" : "files"} onValueChange={(value) => { setTrash(value === "trash"); setSelectedPath(null); setCheckedFiles(new Set()); }} className={cn("flex min-h-0 flex-col gap-3", fillHeight && "flex-1")}>
     <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -89,7 +89,7 @@ export function WorkFolderBrowser({ owner, exampleFiles, readOnly = false, fillH
       </TabsList>
       {!trash && canManageTrash && checkedPaths.length > 0 && <Button variant="outline" size="sm" disabled={disabled} onClick={() => mutation.mutate({ type: "deleteSelected", paths: checkedPaths })}><Trash2 aria-hidden />Move {checkedPaths.length} {checkedPaths.length === 1 ? "file" : "files"} to trash</Button>}
       {!readOnly && <Button variant="outline" size="sm" disabled={disabled || !statuses.some((status) => status.active)} onClick={() => mutation.mutate({ type: "refresh" })}><RefreshCw aria-hidden />Refresh sandbox</Button>}
-      <span className="text-xs text-muted-foreground" role="status">{saving ? "Saving…" : saveFailed ? "Save failed" : "Saved"}</span>
+      <span className="text-xs text-muted-foreground" role="status">{saving ? "Saving…" : mutation.isError ? "Save failed" : failed ? "Run save failed" : "Saved"}</span>
       {lastSaved && <span className="text-xs text-muted-foreground">Last agent save {new Date(lastSaved).toLocaleTimeString()}</span>}
       {lastOperation && (!lastSaved || lastOperation > lastSaved) && <span className="text-xs text-muted-foreground">Files updated {new Date(lastOperation).toLocaleTimeString()}</span>}
     </div>
@@ -98,7 +98,10 @@ export function WorkFolderBrowser({ owner, exampleFiles, readOnly = false, fillH
       <Button variant="outline" size="sm" disabled={disabled || !directory} onClick={() => mutation.mutate({ type: "mkdir" })}><FolderPlus aria-hidden />Create folder</Button>
     </div>}
     {[filesQuery.error, syncQuery.error, mutation.error].filter(Boolean).map((error, index) => <p key={index} role="alert" className="text-sm text-destructive">{(error as Error).message}</p>)}
-    {failed && <p role="alert" className="text-sm text-destructive">{failed.error}</p>}
+    {failed && <p role="alert" className="text-sm text-destructive">
+      A sandbox run could not save its files. The files below are saved copies. {failed.error}{" "}
+      {failed.agentId && <Link className="underline" to={`/agents/${encodeURIComponent(failed.agentId)}/runs/${encodeURIComponent(failed.runId)}`}>View failed run</Link>}
+    </p>}
     <p className="sr-only" aria-live="polite">{announcement}</p>
     {trash ? <TabsContent value="trash" className={cn("overflow-auto", fillHeight ? "min-h-0 flex-1" : "max-h-96")}><p className="mb-3 text-sm text-muted-foreground">Deleted cached files are retained here. Restore them to return them to Files.</p>{files.length === 0 ? <p className="text-sm text-muted-foreground">Trash is empty.</p> : files.map((file) => <div key={file.id} className="flex items-center gap-2 border-b py-2">
       <span className="min-w-0 flex-1 truncate text-sm">{file.path}</span>{canManageTrash && <Button size="sm" variant="outline" disabled={disabled} onClick={() => mutation.mutate({ type: "restore", fileId: file.id })}><RotateCcw aria-hidden />Restore</Button>}

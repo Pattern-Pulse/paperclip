@@ -1,9 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import type { WorkFolderSyncStatus } from "@paperclipai/shared";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorkFolderBrowser } from "./WorkFolderBrowser";
+
+vi.mock("@/context/CompanyContext", () => ({ useCompany: () => ({ selectedCompany: { issuePrefix: "STG" } }) }));
 
 const owner = { companyId: "company", scope: "task" as const, ownerId: "task" };
 const key = ["work-folders", owner.companyId, owner.scope, owner.ownerId];
@@ -11,7 +14,7 @@ function render(statuses: WorkFolderSyncStatus[], lastOperationAt: string | null
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   client.setQueryData([...key, "files", false], { files: [], lastOperationAt });
   client.setQueryData([...key, "sync"], statuses);
-  return renderToStaticMarkup(<QueryClientProvider client={client}><TooltipProvider><WorkFolderBrowser owner={owner} readOnly={readOnly} /></TooltipProvider></QueryClientProvider>);
+  return renderToStaticMarkup(<MemoryRouter initialEntries={["/STG/issues/task"]}><QueryClientProvider client={client}><TooltipProvider><WorkFolderBrowser owner={owner} readOnly={readOnly} /></TooltipProvider></QueryClientProvider></MemoryRouter>);
 }
 const checkpoint: WorkFolderSyncStatus = { runId: "run", state: "saved", active: false,
   lastSavedAt: "2026-09-07T12:00:00.000Z", error: null, refreshRequested: false };
@@ -34,11 +37,20 @@ describe("work folder save feedback", () => {
   });
   it("keeps the last successful checkpoint visible during a failed or pending save", () => {
     const failed = render([{ ...checkpoint, state: "failed", error: "Working copy retained" }], null);
-    expect(failed).toContain('role="status">Save failed');
+    expect(failed).toContain('role="status">Run save failed');
     expect(failed).toContain("Last agent save");
     expect(failed).toContain("Working copy retained");
     const saving = render([{ ...checkpoint, state: "saving", active: true }], null);
     expect(saving).toContain('role="status">Saving…');
     expect(saving).toContain("Last agent save");
+  });
+  it("identifies the failed run when a shared folder also has a newer successful save", () => {
+    const html = render([checkpoint, { ...checkpoint, runId: "older-run", agentId: "other-agent", state: "failed",
+      lastSavedAt: "2026-09-06T12:00:00.000Z", error: "Working copy retained" }], null, true);
+    expect(html).toContain('role="status">Run save failed');
+    expect(html).toContain("The files below are saved copies.");
+    expect(html).toContain('href="/STG/agents/other-agent/runs/older-run"');
+    expect(html).toContain("View failed run");
+    expect(html).toContain("Last agent save");
   });
 });

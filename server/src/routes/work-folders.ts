@@ -94,7 +94,7 @@ export function workFolderRoutes(db: Db, provider?: StorageProvider) {
         if (includedCompletedSave) return [];
         includedCompletedSave = true;
       }
-      return [{ runId: row.runId, state: row.state, lastSavedAt: row.lastSavedAt, error: row.error,
+      return [{ runId: row.runId, agentId: row.manifest.agentId, state: row.state, lastSavedAt: row.lastSavedAt, error: row.error,
         refreshRequested: row.refreshRequested, active }];
     }));
   });

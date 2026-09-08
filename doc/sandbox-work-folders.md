@@ -1,5 +1,7 @@
 # Sandbox work folders
 
+Shared folders can contain saved files from several sandboxes. The cached-file inspector keeps earlier run failures visible with a **View failed run** link, separately from the last successful save time and direct file-operation errors.
+
 The deployed acceptance entry point is `pnpm test:e2e:work-folders:deployed`.
 Set `PAPERCLIP_DEPLOYED_STACK_MANIFEST` to a JSON manifest matching
 `tests/runner-e2e/deployed-stack.ts`, `PAPERCLIP_DEPLOYED_STACK_AUTH` to a private

@@ -9,6 +9,7 @@ export type WorkFolderScenario =
   | "saved"
   | "saving"
   | "failed"
+  | "olderFailure"
   | "empty"
   | "loading"
   | "unavailable"
@@ -147,6 +148,7 @@ export function createWorkFolderFixture(
     if (action === "sync") {
       const status: WorkFolderSyncStatus = {
         runId: "run-storybook",
+        agentId: workFolderOwners.agent.ownerId,
         state:
           scenario === "saving"
             ? "saving"
@@ -161,7 +163,11 @@ export function createWorkFolderFixture(
             ? "Storage is unavailable. Your working files are retained in the sandbox; retry when storage recovers."
             : null,
       };
-      return Response.json([status]);
+      return Response.json(scenario === "olderFailure" ? [status, {
+        ...status, runId: "earlier-run-storybook", state: "failed", active: false,
+        lastSavedAt: "2026-09-07T14:00:00.000Z",
+        error: "An earlier sandbox could not reach storage. Its working copy was retained.",
+      }] : [status]);
     }
     if (action === "refresh") return Response.json({ ok: true });
     if (!action) {
