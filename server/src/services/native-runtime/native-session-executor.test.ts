@@ -209,7 +209,7 @@ import {
 } from "./native-session-executor.js";
 
 describe("remote runner process supervision", () => {
-  it("detaches runnerd from the provider RPC and monitors its durable identity", async () => {
+  it.each([false, true])("supervises detached runnerd and observes signal failures (%s)", async (signalFails) => {
     let launchNonce = "";
     const execute = vi.fn(
       async (input: {
@@ -272,6 +272,7 @@ describe("remote runner process supervision", () => {
           };
         }
         if (label === "paperclip-runner-signal") {
+          if (signalFails) throw new Error("Sandbox state change in progress");
           return {
             exitCode: 0,
             signal: null,
@@ -284,6 +285,7 @@ describe("remote runner process supervision", () => {
       },
     );
     const onSpawn = vi.fn(async () => undefined);
+    const onLog = vi.fn(async () => undefined);
     const launcher = createRemoteRunnerProcessLauncher({
       target: {
         kind: "remote",
@@ -299,6 +301,7 @@ describe("remote runner process supervision", () => {
       diagnosticsDirectory: "/runtime/diagnostics",
       runnerInstanceId: "runner-remote",
       onSpawn,
+      onLog,
     });
 
     const handle = launcher({
@@ -342,6 +345,11 @@ describe("remote runner process supervision", () => {
         ),
       ).toBe(true),
     );
+    if (signalFails) {
+      await vi.waitFor(() => expect(onLog).toHaveBeenCalledWith(
+        "stderr", expect.stringContaining("Failed to signal sandbox runner: Sandbox state change in progress"),
+      ));
+    }
   });
 
   it("terminates a detached runner when its process identity cannot be adopted", async () => {

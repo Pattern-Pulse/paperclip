@@ -5898,6 +5898,18 @@ export function createRemoteRunnerProcessLauncher(input: {
           ],
           bypassSession: true,
           timeoutMs: 10_000,
+        }).catch(async (error: unknown) => {
+          // kill() is synchronous, so it cannot return the provider promise to
+          // its caller. A stopping/replaced sandbox may reject the signal RPC;
+          // observe that rejection without taking down the host process.
+          const message = `[paperclip] Failed to signal sandbox runner: ${error instanceof Error ? error.message : String(error)}\n`;
+          try {
+            if (input.onLog) await input.onLog("stderr", message);
+            else console.warn(message.trimEnd());
+          } catch {
+            // The run log may already be closed during shutdown.
+            console.warn(message.trimEnd());
+          }
         });
         return true;
       },
