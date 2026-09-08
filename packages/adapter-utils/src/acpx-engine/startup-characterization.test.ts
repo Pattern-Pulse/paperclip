@@ -305,6 +305,34 @@ describe("ACPX engine startup characterization", () => {
       expect(bridgeExecEnv?.PAPERCLIP_SANDBOX_EXEC_CHANNEL).toBe("bridge");
       expect(bridgeExecEnv?.PAPERCLIP_API_KEY).toBeUndefined();
     });
+
+    it("keeps the managed Git executable first when the remote agent command starts", async () => {
+      const { root, stateDir, localCwd, executionTarget } = await setupRemoteSandbox();
+      const launcherDir = path.join(root, "managed-github");
+      await fs.mkdir(launcherDir);
+      await fs.writeFile(path.join(launcherDir, "git"), "#!/bin/sh\nprintf managed-git", { mode: 0o700 });
+      const launchPath = `${launcherDir}:${path.dirname(process.execPath)}:/usr/bin:/bin`;
+      let launchPayload: { command: string; args: string[]; env: Record<string, string> } | undefined;
+      executionTarget.runner = createLocalSandboxRunner((input) => {
+        const match = input.args?.[1]?.match(/PAPERCLIP_PROCESS_SESSION_COMMAND_B64='([^']+)'/);
+        if (match) launchPayload = JSON.parse(Buffer.from(match[1]!, "base64").toString("utf8"));
+      });
+      await runExecutor({
+        agent: "custom", agentCommand: "git", stateDir, cwd: localCwd,
+        env: { PATH: launchPath, PAPERCLIP_GITHUB_LAUNCHER_DIR: launcherDir },
+      }, { authToken: "test-run-jwt", executionTarget });
+      expect(launchPayload).toBeDefined();
+      expect(launchPayload!.env.PATH).toBe(launchPath);
+      // Execute the actual launch payload. Checking only its env would miss a
+      // login shell subsequently replacing PATH with the image's defaults.
+      let stdout = "";
+      const result = await runChildProcess("managed-git-launch", launchPayload!.command, launchPayload!.args, {
+        cwd: root, env: launchPayload!.env, timeoutSec: 5, graceSec: 1,
+        onLog: async (stream, chunk) => { if (stream === "stdout") stdout += chunk; },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(stdout).toBe("managed-git");
+    });
   });
 
   // Item 2: the 17 fingerprint fields folded into `configFingerprint`, and the
