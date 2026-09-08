@@ -70,7 +70,7 @@ export function WorkFolderBrowser({ owner, exampleFiles, readOnly = false, fillH
     setAnnouncement(action.type === "refresh" ? "Refresh requested for the next safe run boundary." : "Files saved.");
   }, onSettled: () => queryClient.invalidateQueries({ queryKey: key }) });
   const statuses = syncQuery.data ?? [];
-  const failed = statuses.find((status) => status.state === "failed");
+  const failures = statuses.filter((status) => status.state === "failed");
   const saving = mutation.isPending || statuses.some((status) => status.state === "saving");
   const lastSaved = statuses.map((status) => status.lastSavedAt)
     .filter((value): value is string => Boolean(value)).sort().at(-1);
@@ -89,7 +89,7 @@ export function WorkFolderBrowser({ owner, exampleFiles, readOnly = false, fillH
       </TabsList>
       {!trash && canManageTrash && checkedPaths.length > 0 && <Button variant="outline" size="sm" disabled={disabled} onClick={() => mutation.mutate({ type: "deleteSelected", paths: checkedPaths })}><Trash2 aria-hidden />Move {checkedPaths.length} {checkedPaths.length === 1 ? "file" : "files"} to trash</Button>}
       {!readOnly && <Button variant="outline" size="sm" disabled={disabled || !statuses.some((status) => status.active)} onClick={() => mutation.mutate({ type: "refresh" })}><RefreshCw aria-hidden />Refresh sandbox</Button>}
-      <span className="text-xs text-muted-foreground" role="status">{saving ? "Saving…" : mutation.isError ? "Save failed" : failed ? "Run save failed" : "Saved"}</span>
+      <span className="text-xs text-muted-foreground" role="status">{saving ? "Saving…" : mutation.isError ? "Save failed" : failures.length > 0 ? "Run save failed" : "Saved"}</span>
       {lastSaved && <span className="text-xs text-muted-foreground">Last agent save {new Date(lastSaved).toLocaleTimeString()}</span>}
       {lastOperation && (!lastSaved || lastOperation > lastSaved) && <span className="text-xs text-muted-foreground">Files updated {new Date(lastOperation).toLocaleTimeString()}</span>}
     </div>
@@ -98,10 +98,15 @@ export function WorkFolderBrowser({ owner, exampleFiles, readOnly = false, fillH
       <Button variant="outline" size="sm" disabled={disabled || !directory} onClick={() => mutation.mutate({ type: "mkdir" })}><FolderPlus aria-hidden />Create folder</Button>
     </div>}
     {[filesQuery.error, syncQuery.error, mutation.error].filter(Boolean).map((error, index) => <p key={index} role="alert" className="text-sm text-destructive">{(error as Error).message}</p>)}
-    {failed && <p role="alert" className="text-sm text-destructive">
-      A sandbox run could not save its files. The files below are saved copies. {failed.error}{" "}
-      {failed.agentId && <Link className="underline" to={`/agents/${encodeURIComponent(failed.agentId)}/runs/${encodeURIComponent(failed.runId)}`}>View failed run</Link>}
-    </p>}
+    {failures.length > 0 && <div role="alert" className="text-sm text-destructive">
+      <p>{failures.length === 1 ? "A sandbox run could not save its files." : `${failures.length} sandbox runs could not save their files.`} The files below are saved copies.</p>
+      <ul className="max-h-24 space-y-1 overflow-auto">
+        {failures.map((failure) => <li key={failure.runId}>
+          {failure.error}{" "}
+          {failure.agentId && <Link className="underline" to={`/agents/${encodeURIComponent(failure.agentId)}/runs/${encodeURIComponent(failure.runId)}`} aria-label={`View failed run ${failure.runId}`}>View failed run</Link>}
+        </li>)}
+      </ul>
+    </div>}
     <p className="sr-only" aria-live="polite">{announcement}</p>
     {trash ? <TabsContent value="trash" className={cn("overflow-auto", fillHeight ? "min-h-0 flex-1" : "max-h-96")}><p className="mb-3 text-sm text-muted-foreground">Deleted cached files are retained here. Restore them to return them to Files.</p>{files.length === 0 ? <p className="text-sm text-muted-foreground">Trash is empty.</p> : files.map((file) => <div key={file.id} className="flex items-center gap-2 border-b py-2">
       <span className="min-w-0 flex-1 truncate text-sm">{file.path}</span>{canManageTrash && <Button size="sm" variant="outline" disabled={disabled} onClick={() => mutation.mutate({ type: "restore", fileId: file.id })}><RotateCcw aria-hidden />Restore</Button>}

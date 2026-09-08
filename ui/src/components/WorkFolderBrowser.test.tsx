@@ -53,4 +53,17 @@ describe("work folder save feedback", () => {
     expect(html).toContain("View failed run");
     expect(html).toContain("Last agent save");
   });
+  it("keeps every failed sandbox accessible alongside saved shared files", () => {
+    const html = render([checkpoint, ...["newer", "earlier"].map((runId) => ({
+      ...checkpoint, runId, agentId: "other-agent", state: "failed" as const,
+      error: `Retained ${runId} working copy`,
+    }))], null, true);
+    expect(html).toContain("2 sandbox runs could not save their files.");
+    for (const runId of ["newer", "earlier"]) {
+      expect(html).toContain(`href="/STG/agents/other-agent/runs/${runId}"`);
+      expect(html).toContain(`Retained ${runId} working copy`);
+    }
+    expect(html).toContain("Last agent save");
+  });
+
 });

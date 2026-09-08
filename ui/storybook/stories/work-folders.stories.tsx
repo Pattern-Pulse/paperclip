@@ -33,6 +33,7 @@ const meta = {
         "saving",
         "failed",
         "olderFailure",
+        "multipleFailures",
         "empty",
         "loading",
         "unavailable",
@@ -102,6 +103,7 @@ export const Loading: Story = { args: { scenario: "loading" } };
 export const Saving: Story = { args: { scenario: "saving" } };
 export const SaveFailed: Story = { args: { scenario: "failed" } };
 export const SharedFolderWithEarlierFailure: Story = { args: { scope: "agent", scenario: "olderFailure" } };
+export const SharedFolderWithMultipleFailures: Story = { args: { scope: "agent", scenario: "multipleFailures" } };
 export const StorageUnavailable: Story = { args: { scenario: "unavailable" } };
 export const UploadFailed: Story = {
   args: { scenario: "uploadFailed" },
