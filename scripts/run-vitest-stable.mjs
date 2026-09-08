@@ -275,8 +275,7 @@ function runVitest(args, label) {
   console.log(`\n[test:run] ${label}`);
   invocationIndex += 1;
   const tempRootParent = process.platform === "win32" ? os.tmpdir() : "/tmp";
-  // /tmp is a symlink on macOS. Workspace confinement intentionally rejects
-  // aliases, so fixtures must receive the canonical root just as Linux does.
+  // Canonical roots keep security fixtures valid on macOS, where /tmp is a symlink.
   const testRoot = realpathSync(mkdtempSync(path.join(tempRootParent, `pcvt-${process.pid}-${invocationIndex}-`)));
   // Keep per-run paths compact so Unix socket fixtures stay under macOS path limits.
   const env = {
