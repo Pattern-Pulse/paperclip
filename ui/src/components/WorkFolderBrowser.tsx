@@ -77,8 +77,8 @@ export function WorkFolderBrowser({ owner, exampleFiles, readOnly = false, fillH
   const lastOperation = filesQuery.data?.lastOperationAt;
   const saveLabel = mutation.isPending ? "Saving…"
     : mutation.isError ? "Save failed"
-    : syncQuery.isError || filesQuery.isError ? "Save status unavailable"
-    : !exampleFiles && (syncQuery.isPending || filesQuery.isPending) ? "Loading save status…"
+    : syncQuery.isError ? "Save status unavailable"
+    : !exampleFiles && syncQuery.isPending ? "Loading save status…"
     : saving ? "Saving…"
     : failures.length > 0 ? "Run save failed"
     : !lastSaved && statuses.some((status) => status.active) ? "Waiting for first save"
@@ -138,7 +138,7 @@ export function WorkFolderBrowser({ owner, exampleFiles, readOnly = false, fillH
             return next;
           });
         }}
-        onSelectFile={setSelectedPath} loading={!exampleFiles && filesQuery.isLoading} empty={{ title: "No files yet", description: readOnly ? "No cached files have been saved for this scope." : "Upload files here, or create them during a sandbox run." }} ariaLabel={`${owner.scope} files`} /></div>
+        onSelectFile={setSelectedPath} loading={!exampleFiles && filesQuery.isLoading} empty={filesQuery.isError ? { title: "File list unavailable", description: "The saved contents could not be listed." } : { title: "No files yet", description: readOnly ? "No cached files have been saved for this scope." : "Upload files here, or create them during a sandbox run." }} ariaLabel={`${owner.scope} files`} /></div>
       <div className="flex min-h-0 flex-col gap-2 md:col-span-2">
         {selected && <div className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate text-sm">{selected.path}</span>
           {selected.kind === "file" && !exampleFiles && <Button asChild size="sm" variant="outline"><a href={workFoldersApi.downloadUrl(owner, selected.path)} download><Download aria-hidden />Download</a></Button>}

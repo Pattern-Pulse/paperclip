@@ -10,13 +10,16 @@ vi.mock("@/context/CompanyContext", () => ({ useCompany: () => ({ selectedCompan
 
 const owner = { companyId: "company", scope: "task" as const, ownerId: "task" };
 const key = ["work-folders", owner.companyId, owner.scope, owner.ownerId];
-function render(statuses: WorkFolderSyncStatus[], lastOperationAt: string | null, readOnly = false, queryState?: "loading" | "error") {
+function render(statuses: WorkFolderSyncStatus[], lastOperationAt: string | null, readOnly = false, queryState?: "loading" | "error", filesState?: "loading" | "error") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   client.setQueryData([...key, "files", false], { files: [], lastOperationAt });
   client.setQueryData([...key, "sync"], statuses);
   if (queryState === "loading") client.removeQueries({ queryKey: [...key, "sync"] });
   if (queryState === "error") client.getQueryCache().find({ queryKey: [...key, "sync"] })!
     .setState({ status: "error", error: new Error("Save service unavailable") });
+  if (filesState === "loading") client.removeQueries({ queryKey: [...key, "files", false] });
+  if (filesState === "error") client.getQueryCache().find({ queryKey: [...key, "files", false] })!
+    .setState({ status: "error", error: new Error("File listing unavailable") });
   return renderToStaticMarkup(<MemoryRouter initialEntries={["/STG/issues/task"]}><QueryClientProvider client={client}><TooltipProvider><WorkFolderBrowser owner={owner} readOnly={readOnly} /></TooltipProvider></QueryClientProvider></MemoryRouter>);
 }
 const checkpoint: WorkFolderSyncStatus = { runId: "run", state: "saved", active: false,
@@ -35,6 +38,18 @@ describe("work folder save feedback", () => {
     expect(unavailable).toContain('role="status">Save status unavailable');
     expect(unavailable).toContain("Last agent save");
     expect(unavailable).toContain("Save service unavailable");
+  });
+  it.each(["loading", "error"] as const)("preserves known save status while file listing is %s", (filesState) => {
+    for (const [state, expected] of [["saved", "Saved"], ["saving", "Saving…"], ["failed", "Run save failed"]] as const) {
+      const html = render([{ ...checkpoint, state }], null, true, undefined, filesState);
+      expect(html).toContain(`role="status">${expected}`);
+      expect(html).toContain("Last agent save");
+      if (filesState === "error") {
+        expect(html).toContain("File listing unavailable");
+        expect(html).toContain("File list unavailable");
+        expect(html).not.toContain("No files yet");
+      }
+    }
   });
   it("keeps inspection free of controls that mutate the cache or refresh the sandbox", () => {
     const html = render([checkpoint], null, true);
