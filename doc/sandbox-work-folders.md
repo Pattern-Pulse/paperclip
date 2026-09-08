@@ -51,8 +51,8 @@ in the sandbox home. For API-key Codex ACP runs, the adapter writes the explicit
 key to an owner-only login file in the staging copy; host credentials stay unchanged.
 Per-run GitHub launchers declare their own CommonJS package scope so warm runs
 inside ES-module repositories can still execute Git and GitHub CLI commands. Native runner launches carry the validated scoped paths
-through runnerd to ACPX, including the explicitly controller-projected GitHub
-broker environment. ACPX does not inherit ambient host GitHub credentials or
+through both runnerd’s Rust sidecar filter and the ACPX JavaScript launch filter,
+including the explicitly controller-projected GitHub broker environment. ACPX does not inherit ambient host GitHub credentials or
 shell startup hooks. CLI configuration remains in its private runtime directories.
 Warm sandbox task bindings persist independently of the experimental isolated
 workspace setting. Only the active host run can establish that binding; the
