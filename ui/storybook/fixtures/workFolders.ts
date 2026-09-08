@@ -180,6 +180,11 @@ export function createWorkFolderFixture(
     }
     const path = url.searchParams.get("path") ?? "";
     if (action === "content" && request.method === "GET") {
+      if (
+        !state.files.some((file) => file.path === path && file.kind === "file")
+      ) {
+        return fail("File not found", 404);
+      }
       if (path === "assets/paperclip.png")
         return fetch("/android-chrome-192x192.png", { signal: request.signal });
       const blob = state.contents.get(path);
@@ -245,8 +250,12 @@ export function createWorkFolderFixture(
         state.files.forEach((f) => {
           if (inDeletedTree(f)) f.deletedAt = null;
         });
-      if (op.action === "purge")
+      if (op.action === "purge") {
+        for (const file of state.files.filter(inDeletedTree)) {
+          state.contents.delete(file.path);
+        }
         state.files = state.files.filter((f) => !inDeletedTree(f));
+      }
     } else return fail("Unsupported fixture operation", 405);
     state.changed = true;
     return Response.json({ ok: true });
