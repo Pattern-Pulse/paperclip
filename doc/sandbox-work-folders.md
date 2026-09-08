@@ -5,6 +5,8 @@ Set `PAPERCLIP_DEPLOYED_STACK_MANIFEST` to a JSON manifest matching
 `tests/runner-e2e/deployed-stack.ts`, `PAPERCLIP_DEPLOYED_STACK_AUTH` to a private
 0600 JSON file containing `baseURL` and a normally authorized `boardApiToken`,
 and `PAPERCLIP_DEPLOYED_STACK_EVIDENCE` to an absolute output directory.
+The token must belong to the manifest's `userId` and have company access. The
+harness verifies that identity before file operations or paid agent execution.
 The harness never launches a local server. It checks the deployed commit and
 adapter inventory, exercises scoped file APIs, and starts real sandbox tasks
 for every configured profile, including cold/warm Git state and real timed saves.

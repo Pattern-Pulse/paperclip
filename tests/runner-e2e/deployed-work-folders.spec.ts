@@ -14,6 +14,9 @@ const folder = (scope: string, ownerId: string) => `/api/companies/${stack.compa
 test.beforeAll(async () => {
   const health = await api.json<{ commit: string }>("/api/health");
   expect(health.commit, "Only exercise the declared deployed candidate").toBe(stack.commit);
+  const identity = await api.json<{ userId: string; companyIds: string[] }>("/api/cli-auth/me");
+  expect(identity.userId, "The board token must belong to the manifest's responsible user").toBe(stack.userId);
+  expect(identity.companyIds, "The board token must have access to the acceptance company").toContain(stack.companyId);
 });
 
 test("deployed candidate and complete supported adapter inventory", async ({}, info) => {
@@ -95,7 +98,8 @@ for (const profile of stack.profiles) {
     expect(content.status).toBe(200); expect(await content.text()).toBe(nonce);
     const coldRunIds = new Set(cold.saves.map((save) => save.runId));
     const coldSave = cold.saves.find((save) => !save.active && save.state === "saved")!;
-    const coldRun = await api.json<{ contextSnapshot: { paperclipWorkFolders: SandboxWorkFolderManifest } }>(`/api/heartbeat-runs/${coldSave.runId}`);
+    const coldRun = await api.json<{ status: string; contextSnapshot: { paperclipWorkFolders: SandboxWorkFolderManifest } }>(`/api/heartbeat-runs/${coldSave.runId}`);
+    expect(coldRun.status, "A saved checkpoint must not hide a failed adapter run").toBe("succeeded");
     const coldManifest = coldRun.contextSnapshot.paperclipWorkFolders;
     expect(coldManifest.sandboxKey).toBeTruthy();
     const owners = {task: issue.id, agent: profile.agentId, user: stack.userId, project: stack.projectId};
@@ -121,7 +125,8 @@ for (const profile of stack.profiles) {
     const warmContent = await api.request(`${base}/content?path=warm.txt`);
     expect(warmContent.status).toBe(200); expect(await warmContent.text()).toBe(nonce);
     const warmSave = warm.saves.find((save) => !save.active && save.state === "saved")!;
-    const warmRun = await api.json<{ contextSnapshot: { paperclipWorkFolders: SandboxWorkFolderManifest } }>(`/api/heartbeat-runs/${warmSave.runId}`);
+    const warmRun = await api.json<{ status: string; contextSnapshot: { paperclipWorkFolders: SandboxWorkFolderManifest } }>(`/api/heartbeat-runs/${warmSave.runId}`);
+    expect(warmRun.status, "The warm adapter run must also succeed").toBe("succeeded");
     const warmManifest = warmRun.contextSnapshot.paperclipWorkFolders;
     expect(warmManifest.sandboxKey, "Warm acceptance requires the same physical sandbox").toBe(coldManifest.sandboxKey);
     await info.attach("cold-and-warm-checkpoints", { contentType: "application/json", body: Buffer.from(JSON.stringify({ cold: cold.saves, warm: warm.saves, coldManifest, warmManifest })) });
