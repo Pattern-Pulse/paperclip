@@ -1,12 +1,8 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, within } from "storybook/test";
-import {
-  WorkFolderBrowser,
-  WorkFolderButton,
-} from "@/components/WorkFolderBrowser";
+import { WorkFolderBrowser } from "@/components/WorkFolderBrowser";
 import { WorkFolderStoryProvider } from "../fixtures/WorkFolderStoryProvider";
 import {
-  workFolderLabels,
   workFolderOwners,
   type WorkFolderScenario,
 } from "../fixtures/workFolders";
@@ -15,20 +11,19 @@ import type { WorkFolderScope } from "@paperclipai/shared";
 type Args = {
   scope: WorkFolderScope;
   scenario: WorkFolderScenario;
-  presentation: "browser" | "button";
 };
 const meta = {
-  title: "Work folders/Components",
+  title: "Work folders/Stored-file prototype",
   parameters: {
     layout: "padded",
     docs: {
       description: {
         component:
-          "The actual reusable WorkFolderBrowser and WorkFolderButton. All file operations are in-memory fixtures: upload, create folder, delete, restore, purge, refresh, and download are safe to try. Change scope in Controls; use the toolbar for dark/light and mobile review. Reload a story to reset its files.",
+          "Unshipped stored-file browser prototype. Application entry points were removed because saved copies are not the live sandbox filesystem. This Storybook-only review surface uses disposable in-memory data; debug inspection and live sandbox browsing need separate designs.",
       },
     },
   },
-  args: { scope: "task", scenario: "saved", presentation: "browser" },
+  args: { scope: "task", scenario: "saved" },
   argTypes: {
     scope: { control: "select", options: ["task", "agent", "project", "user"] },
     scenario: {
@@ -43,22 +38,15 @@ const meta = {
         "uploadFailed",
       ],
     },
-    presentation: { control: "radio", options: ["browser", "button"] },
   },
-  render: ({ scope, scenario, presentation }) => (
-    <WorkFolderStoryProvider
-      key={`${scope}:${scenario}:${presentation}`}
-      scenario={scenario}
-    >
+  render: ({ scope, scenario }) => (
+    <WorkFolderStoryProvider key={`${scope}:${scenario}`} scenario={scenario}>
       <div className="mx-auto max-w-5xl">
-        {presentation === "button" ? (
-          <WorkFolderButton
-            owner={workFolderOwners[scope]}
-            label={workFolderLabels[scope]}
-          />
-        ) : (
-          <WorkFolderBrowser owner={workFolderOwners[scope]} />
-        )}
+        <p className="mb-4 text-sm text-muted-foreground">
+          Stored-file prototype — not exposed in the app. These are saved
+          copies, not the live sandbox filesystem.
+        </p>
+        <WorkFolderBrowser owner={workFolderOwners[scope]} />
       </div>
     </WorkFolderStoryProvider>
   ),
@@ -67,15 +55,6 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const BrowseAndManage: Story = {};
-export const FileButton: Story = { args: { presentation: "button" } };
-export const OpenDialog: Story = {
-  args: { presentation: "button" },
-  play: async ({ canvasElement }) => {
-    await userEvent.click(
-      await within(canvasElement).findByRole("button", { name: "Task files" }),
-    );
-  },
-};
 export const MarkdownPreview: Story = {
   play: async ({ canvasElement }) => {
     await userEvent.click(await within(canvasElement).findByText("README.md"));

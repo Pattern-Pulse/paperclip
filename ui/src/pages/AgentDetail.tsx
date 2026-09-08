@@ -59,7 +59,6 @@ import { cn } from "../lib/utils";
 import { describeRunRetryState } from "../lib/runRetryState";
 import { Button } from "@/components/ui/button";
 import { Tabs } from "@/components/ui/tabs";
-import { WorkFolderButton } from "@/components/WorkFolderBrowser";
 import { PageTabBar } from "../components/PageTabBar";
 import { AuditFeed } from "./audit/AuditFeed";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -1373,8 +1372,6 @@ export function AgentDetail() {
           />
         </Tabs>
       ) : null}
-
-      <WorkFolderButton owner={{ companyId: agent.companyId, scope: "agent", ownerId: agent.id }} label="Agent files" />
 
       {actionError && <p className="text-sm text-destructive">{actionError}</p>}
       {isPendingApproval && (

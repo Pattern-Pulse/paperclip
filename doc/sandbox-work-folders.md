@@ -132,11 +132,16 @@ directories are not supported by this checkpoint format.
 
 ## API and UI
 
-The task, agent, project, and current-user pages expose a Files dialog using the
-shared file tree and viewer. It supports uploads, folder creation, previews,
-downloads, deletion, trash restore/purge, and sync state with the last agent save
-time. Direct file-operation timestamps are labeled separately as “Files updated”;
-a delete, restore, or idempotent receipt is not presented as an agent checkpoint.
+The task, agent, project, and current-user pages do not expose stored-file
+browsing. The 2026-09-08 design review removed these entry points: durable copies
+can lag behind a running sandbox and do not represent its complete filesystem.
+The persistence and synchronization APIs remain available to the runtime.
+
+Two separate features are deferred: debug inspection of persisted collections,
+and authorized inspection of the live sandbox filesystem across its task,
+agent, user, project, and repository context. The stored-file browser remains
+only as an unshipped Storybook prototype. It must not be presented as a live
+sandbox view. Page stories show the current pages without Files buttons.
 
 All routes start at
 `/api/companies/:companyId/work-folders/:scope/:ownerId`:
@@ -166,7 +171,9 @@ new pinned staging stack with the branch's Cloud image and matching migrator.
 The deployed harness must target that tenant URL without launching a local
 server. Enumerate every sandbox-capable adapter/engine and native profile
 exposed by the stack; missing credentials or skipped required profiles block
-acceptance. Record real browser operations, two actual 180-second intervals,
+acceptance. Verify that the removed stored-file entry points are absent from
+the UI; browser-based file-management acceptance is deferred with the separate
+inspection features. Record API/runner operations, two actual 180-second intervals,
 short-run flushes, independent task checkouts, identity/privacy boundaries,
 interrupted saves, and recovery without the original sandbox or app volume.
 

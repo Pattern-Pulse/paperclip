@@ -1,6 +1,5 @@
 import { useEffect } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
 import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { PluginLauncherProvider } from "@/plugins/launchers";
 import { Layout } from "@/components/Layout";
@@ -15,11 +14,7 @@ import {
   workFolderProject,
   workFolderTask,
 } from "../fixtures/WorkFolderStoryProvider";
-import {
-  WORK_FOLDER_COMPANY,
-  workFolderLabels,
-  type WorkFolderScenario,
-} from "../fixtures/workFolders";
+import { WORK_FOLDER_COMPANY } from "../fixtures/workFolders";
 import type { WorkFolderScope } from "@paperclipai/shared";
 
 const paths = {
@@ -64,77 +59,25 @@ const meta = {
     docs: {
       description: {
         component:
-          "Real production pages inside the application Layout, including sidebar, breadcrumb, and original file-button placement. These are current designs, not redesigned mockups. Task files are in the task thread, Agent files and Project files are in their detail pages, and My files is at the bottom of Profile settings. The Open stories click the actual entry point. Work-folder actions use disposable in-memory data; other page edits are not simulated.",
+          "Current production pages after removing the stored-file entry points. Persisted copies do not represent the live sandbox filesystem. Debug inspection of saved files and live sandbox browsing are deferred features. Page mutations are not simulated.",
       },
     },
   },
-  args: { scope: "task", scenario: "saved" },
-  argTypes: {
-    scope: { control: false },
-    scenario: {
-      control: "select",
-      options: ["saved", "saving", "failed", "empty", "unavailable"],
-    },
-  },
-  render: ({
-    scope,
-    scenario,
-  }: {
-    scope: WorkFolderScope;
-    scenario: WorkFolderScenario;
-  }) => (
-    <WorkFolderStoryProvider key={`${scope}:${scenario}`} scenario={scenario}>
+  args: { scope: "task" },
+  argTypes: { scope: { control: false } },
+  render: ({ scope }: { scope: WorkFolderScope }) => (
+    <WorkFolderStoryProvider key={scope}>
       <Page scope={scope} />
     </WorkFolderStoryProvider>
   ),
-} satisfies Meta<{ scope: WorkFolderScope; scenario: WorkFolderScenario }>;
+} satisfies Meta<{ scope: WorkFolderScope }>;
 export default meta;
 type Story = StoryObj<typeof meta>;
-const openFiles: NonNullable<Story["play"]> = async ({
-  canvasElement,
-  args,
-}) => {
-  const label = workFolderLabels[args.scope];
-  await userEvent.click(
-    await within(canvasElement).findByRole(
-      "button",
-      { name: label },
-      { timeout: 15000 },
-    ),
-  );
-  await expect(
-    await within(canvasElement.ownerDocument.body).findByRole("dialog", {
-      name: label,
-    }),
-  ).toBeVisible();
-};
 export const TaskPage: Story = { args: { scope: "task" } };
-export const TaskFilesOpen: Story = {
-  args: { scope: "task" },
-  play: openFiles,
-};
 export const AgentPage: Story = { args: { scope: "agent" } };
-export const AgentFilesOpen: Story = {
-  args: { scope: "agent" },
-  play: openFiles,
-};
 export const ProjectPage: Story = { args: { scope: "project" } };
-export const ProjectFilesOpen: Story = {
-  args: { scope: "project" },
-  play: openFiles,
-};
 export const ProfileSettingsPage: Story = { args: { scope: "user" } };
-export const MyFilesOpen: Story = { args: { scope: "user" }, play: openFiles };
-export const TaskSaveFailed: Story = {
-  args: { scope: "task", scenario: "failed" },
-  play: openFiles,
-};
-export const ProjectEmptyFolder: Story = {
-  args: { scope: "project", scenario: "empty" },
-  play: openFiles,
-};
-export const MobileTaskFilesOpen: Story = {
+export const MobileTaskPage: Story = {
   args: { scope: "task" },
   globals: { viewport: { value: "mobile" } },
-  play: openFiles,
 };

@@ -1,6 +1,6 @@
 import { useId, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, FolderOpen, FolderPlus, RefreshCw, RotateCcw, Trash2, Upload } from "lucide-react";
+import { Download, FolderPlus, RefreshCw, RotateCcw, Trash2, Upload } from "lucide-react";
 import type { WorkFile, WorkFolderOwner } from "@paperclipai/shared";
 import { workFoldersApi } from "@/api/work-folders";
 import { FileTree, type FileTreeNode } from "@/components/FileTree";
@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 
 function tree(files: WorkFile[]) {
   const root: FileTreeNode = { name: "", path: "", kind: "dir", children: [] };
@@ -28,16 +27,6 @@ function tree(files: WorkFile[]) {
   }
   function sort(nodes: FileTreeNode[]) { nodes.sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name)); nodes.forEach((node) => sort(node.children)); }
   sort(root.children); return root.children;
-}
-
-export function WorkFolderButton({ owner, label = "Files" }: { owner: WorkFolderOwner; label?: string }) {
-  return <Dialog><DialogTrigger asChild><Button variant="outline" size="sm"><FolderOpen aria-hidden />{label}</Button></DialogTrigger>
-    <DialogContent className="flex max-h-screen flex-col sm:max-w-5xl">
-      <DialogHeader><DialogTitle>{label}</DialogTitle><DialogDescription>
-        {owner.scope === "user" ? "Your private Paperclip files in this company." : `Files shared with this ${owner.scope}'s sandbox runs.`} Changes from running agents are saved every three minutes and when a run ends.
-      </DialogDescription></DialogHeader>
-      <WorkFolderBrowser key={`${owner.companyId}:${owner.scope}:${owner.ownerId}`} owner={owner} />
-    </DialogContent></Dialog>;
 }
 
 export function WorkFolderBrowser({ owner, exampleFiles }: { owner: WorkFolderOwner; exampleFiles?: WorkFile[] }) {

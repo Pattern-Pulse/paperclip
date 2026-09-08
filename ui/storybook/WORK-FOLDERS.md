@@ -3,53 +3,48 @@
 Run `pnpm storybook` from the repository root. Open the **Work folders** group.
 The default URL is `http://localhost:6006`.
 
-## Components
+## Current pages
 
-`Work folders / Components` renders the production `WorkFolderBrowser` and
-`WorkFolderButton`. It includes the browser, its trigger and dialog, Markdown,
-code, image and empty-file previews, unsupported/large-file messages, loading,
-empty, saving, failed-save, unavailable-storage, failed-upload, trash, and
-permanent-deletion confirmation states. `Upload Delete Restore` exercises the
-full recovery interaction and leaves the restored file available for review.
+The 2026-09-08 design decision removes stored-file entry points from task, agent,
+project, and profile pages. Saved copies can lag behind the running sandbox and
+are not a complete view of what the agent sees on disk. No replacement Files
+link is added to the properties pane.
+
+**Work folders / Pages** mounts the actual pages inside `Layout`: Task Page,
+Agent Page, Project Page, Profile Settings Page, and Mobile Task Page. These show
+the current UI without the removed buttons. The previous open-dialog stories
+have been removed.
+
+## Deferred inspection features
+
+Debug inspection of persisted files and live sandbox filesystem browsing need
+separate designs. Persistence, checkpointing, and the runtime APIs remain in
+place; this UI change does not remove saved data or alter synchronization.
+
+**Work folders / Stored-file prototype** retains the reusable browser for design
+reference only. It is explicitly labeled as unshipped and has no entry point in
+the application or Design Guide. It includes Markdown, code, image and empty-file
+previews, unsupported/large-file messages, loading, empty, saving, failed-save,
+unavailable-storage, failed-upload, trash, and permanent-deletion states.
 
 Use **Controls** to change task/agent/project/user scope or the fixture state.
-Use Storybook's theme and viewport toolbar controls for light/dark and mobile
-review. The fixtures reset when you reload the story or change its controls.
-
-## Pages
-
-`Work folders / Pages` mounts the actual route pages inside `Layout`:
-
-| Page             | Current entry point                                  | Stories                                                |
-| ---------------- | ---------------------------------------------------- | ------------------------------------------------------ |
-| Task detail      | Task files above the task thread                     | Task Page, Task Files Open, Task Save Failed           |
-| Agent detail     | Agent files in the detail header                     | Agent Page, Agent Files Open                           |
-| Project detail   | Project files in the project header                  | Project Page, Project Files Open, Project Empty Folder |
-| Profile settings | My files below the profile and inbox policy settings | Profile Settings Page, My Files Open                   |
-
-The page stories preserve existing placement, copy, and spacing. They are a
-review surface for the current implementation, not proposed redesigns. The
-Open stories activate the page's real button automatically. Close the dialog
-to review its surrounding page.
+The toolbar supports light/dark and mobile review. Fixtures reset when you reload
+the story or change its controls.
 
 ## Fixture boundaries
 
-Uploads, previews, downloads, folder creation, deletion, restoration, purge,
-and refresh use a fresh in-memory API per story. They do not contact a tenant,
-launch agents, or persist files. Downloads contain fixture data only. Other
-page mutations display an explicit unsupported-demo message. The story restores
-its fetch handler and clears its isolated query cache on unmount. The loading
-scenario intentionally remains pending until you leave that story.
+Prototype uploads, previews, downloads, folder creation, deletion, restoration,
+purge, and refresh use fresh in-memory data. They do not contact a tenant, launch
+agents, or persist files. Other page mutations display an unsupported-demo
+message. The story restores its fetch handler and clears its query cache on
+unmount. The loading example remains pending until you leave the story.
 
-Saving and failed states are fixed examples for visual review. Refresh shows the
-real acknowledgement, but does not launch a sandbox. These stories do not replace
-the deployed persistence and runner acceptance matrix.
+Saving and failed states are fixed visual examples. Refresh shows the real
+acknowledgement but does not launch a sandbox. These prototypes do not replace
+runtime persistence testing or implement either deferred inspection feature.
 
 ## Supporting UI
 
-The feature stack also changes the native runner's Pi ACPX selector and
-Cloud-aware CLI authorization. **Work folders / Supporting UI** shows the real
-runtime fields and the request, approved, sign-in-required, and expired CLI
-pages. These use fictional challenges and cannot grant access or create keys.
-The file viewer's shared rendering is covered by the component preview stories;
-the design-guide examples use the same browser component.
+**Work folders / Supporting UI** shows the native Pi ACPX selector and the
+request, approved, sign-in-required, and expired CLI authorization pages. The
+fictional challenges cannot grant access or create keys.
