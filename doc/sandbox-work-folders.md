@@ -8,6 +8,9 @@ and `PAPERCLIP_DEPLOYED_STACK_EVIDENCE` to an absolute output directory.
 The harness never launches a local server. It checks the deployed commit and
 adapter inventory, exercises scoped file APIs, and starts real sandbox tasks
 for every configured profile, including cold/warm Git state and real timed saves.
+Cold and warm checks verify actual file bytes in all four scopes, including
+nested empty executable files. Disposable Git commits use an explicit author
+and committer environment because sandbox launches clear inherited Git identity.
 Engine coverage is derived from each live agent's configuration. A warm pass
 requires the same host-recorded physical sandbox identity and a surviving cache
 marker; restoring durable files into a replacement is tested separately.
@@ -86,6 +89,12 @@ overwriting a later writer. A failed save remains visible and prevents lease
 cleanup from destroying the working copy. Providers with resume support can
 recover a retained lease on the next run with the same identity/configuration,
 including a lease originally configured as ephemeral.
+
+S3 uploads observe source completion and cancel failed requests before reporting
+success. Optional SDK streaming checksums are disabled to avoid an unhandled
+digest rejection when a source file changes during transfer. Work-folder SHA-256
+verification and complete-checkpoint publication remain required. A changing
+source must fail its save without stopping the application or another run.
 
 Deletion moves files to recoverable trash. Restore rejects path collisions.
 Explicit purge and permanent owner deletion schedule object cleanup through a
@@ -177,14 +186,21 @@ new pinned staging stack with the branch's Cloud image and matching migrator.
 The deployed harness must target that tenant URL without launching a local
 server. Enumerate every sandbox-capable adapter/engine and native profile
 exposed by the stack; missing credentials or skipped required profiles block
-acceptance. Verify that the removed stored-file entry points are absent from
-the UI; browser-based file-management acceptance is deferred with the separate
-inspection features. Record API/runner operations, two actual 180-second intervals,
+acceptance. Verify that standalone stored-file entry points are absent from
+the UI, then enable experimental cached-file inspection and test the task
+dialog's four scopes, previews, downloads, checkbox selection, trash, restoration,
+and save feedback in the deployed browser. Record API/runner operations, two actual 180-second intervals,
 short-run flushes, independent task checkouts, identity/privacy boundaries,
 interrupted saves, and recovery without the original sandbox or app volume.
 
 Passing acceptance does not authorize a merge or mainline release. Both require
 the user's explicit sign-off.
+
+Cloud's `deploy:stack` tool can deploy an unpublished branch commit to an
+explicit staging tenant. Run it from the Cloud checkout with the staging tenant
+URL and full commit SHA. Pin the target stack first. Require the tool's migration
+and readiness gates plus an authenticated tenant health response with the exact
+SHA. This does not authorize a mainline release or a fleet-default promotion.
 
 Staging migrator artifacts use an immutable object-storage prefix. The Docker
 workflow's optional `staging_artifact_base_url` input builds DB/shared tarballs

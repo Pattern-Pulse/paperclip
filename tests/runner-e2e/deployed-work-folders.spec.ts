@@ -98,6 +98,17 @@ for (const profile of stack.profiles) {
     const coldRun = await api.json<{ contextSnapshot: { paperclipWorkFolders: SandboxWorkFolderManifest } }>(`/api/heartbeat-runs/${coldSave.runId}`);
     const coldManifest = coldRun.contextSnapshot.paperclipWorkFolders;
     expect(coldManifest.sandboxKey).toBeTruthy();
+    const owners = {task: issue.id, agent: profile.agentId, user: stack.userId, project: stack.projectId};
+    expect(coldManifest.responsibleUserId).toBe(stack.userId);
+    for (const [scope, owner] of Object.entries(owners)) {
+      const scoped = folder(scope, owner);
+      const read = await api.request(`${scoped}/content?path=${encodeURIComponent(`roundtrip-${nonce}/message.txt`)}`);
+      expect(read.status, `${profile.id} ${scope} durable bytes`).toBe(200);
+      expect(await read.text()).toBe(nonce);
+      const listing = await api.json<WorkFolderListing>(scoped);
+      expect(listing.files.find(file => file.path === `roundtrip-${nonce}/empty.sh`)).toMatchObject({byteSize:0, executable:true});
+    }
+
     await api.json(`/api/issues/${issue.id}`, "PATCH", { status: "todo", description: repoAcceptancePrompt(nonce, true) });
     const warm = await pollUntil({ label: `${profile.id} warm run preserves saved work`, deadlineAt: Date.now() + 840_000,
       intervalMs: 5_000,

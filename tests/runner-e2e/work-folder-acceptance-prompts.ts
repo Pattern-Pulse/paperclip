@@ -17,7 +17,7 @@ export function repoAcceptanceScript(nonce: string, warm: boolean): string {
     '  test ! -e "$repo/.acceptance-owner"',
     `  printf '%s' '${nonce}' > "$repo/.acceptance-owner"`,
     '  git -C "$repo" add -- .acceptance-owner',
-    '  git -C "$repo" -c user.name=Acceptance -c user.email=acceptance@example.invalid commit -m acceptance',
+    '  env GIT_AUTHOR_NAME=Acceptance GIT_AUTHOR_EMAIL=acceptance@example.invalid GIT_COMMITTER_NAME=Acceptance GIT_COMMITTER_EMAIL=acceptance@example.invalid git -C "$repo" commit -m acceptance',
     '  git -C "$repo" rev-parse HEAD > "$HOME/task/head-$name.txt"',
     '  printf staged > "$repo/.acceptance-state"', '  git -C "$repo" add -- .acceptance-state',
     '  printf unstaged > "$repo/.acceptance-state"', '  printf untracked > "$repo/.acceptance-untracked"',
@@ -33,7 +33,20 @@ export function repoAcceptanceScript(nonce: string, warm: boolean): string {
       `printf '%s' '${nonce}' > "$HOME/task/acceptance.txt"`,
       `printf '%s' '${nonce}' > "$HOME/agent/acceptance-${nonce}.txt"`,
       `printf '%s' '${nonce}' > "$HOME/.cache/warm-${nonce}"`,
-    ]), 'printf "ACCEPTANCE_SCRIPT_PASSED\\n"',
+    ]),
+    'for scope in task agent user project; do',
+    ...(warm ? [
+      `test "$(cat "$HOME/$scope/roundtrip-${nonce}/message.txt")" = '${nonce}'`,
+      `test -f "$HOME/$scope/roundtrip-${nonce}/empty.sh"`,
+      `test ! -s "$HOME/$scope/roundtrip-${nonce}/empty.sh"`,
+      `test -x "$HOME/$scope/roundtrip-${nonce}/empty.sh"`,
+    ] : [
+      `mkdir -p "$HOME/$scope/roundtrip-${nonce}"`,
+      `printf '%s' '${nonce}' > "$HOME/$scope/roundtrip-${nonce}/message.txt"`,
+      `: > "$HOME/$scope/roundtrip-${nonce}/empty.sh"`,
+      `chmod +x "$HOME/$scope/roundtrip-${nonce}/empty.sh"`,
+    ]),
+    'done', 'printf "ACCEPTANCE_SCRIPT_PASSED\\n"',
   ].join("\n");
 }
 
