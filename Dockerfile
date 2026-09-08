@@ -121,11 +121,21 @@ RUN rm -rf packages/paperclip-runner/runner/target
 # skip the full install: `build` above needs every devDependency present
 # (typescript, vite, cargo's crates, ...) to actually compile the ui,
 # plugin-sdk, and server. Only once that's done do we know it's safe to
-# drop them. `pnpm prune --prod` looked like the narrower tool for this,
-# but it only prunes the *root* workspace importer's devDependencies, not
-# each member's independently, and takes no --filter -- so it can't scope
-# to just server's own graph. A filtered `install --prod` is the only
-# primitive that does, and it requires a clean node_modules first.
+# drop them. `pnpm prune --prod` looked like the narrower tool for this;
+# it isn't. Run bare it only prunes the *root* workspace importer, but
+# `pnpm prune --prod -C <dir>` does correctly scope to one member's own
+# devDependencies -- verified by running it against every workspace
+# member in turn, which measurably unlinked each member's own dev-only
+# packages. It still leaves the shipped node_modules unchanged in
+# aggregate, because prune only drops a package once *every* importer
+# that references it, prod or dev, has released it, and `ui` remains a
+# full workspace member throughout with its own real (non-dev)
+# dependencies -- some of which need typescript/vite/vitest/rolldown as
+# peer dependencies regardless of dev/prod classification. No amount of
+# per-member pruning can exclude `ui`'s footprint the way `--filter`
+# does, because prune never stops trying to satisfy it. A filtered
+# `install --prod` is the only primitive that scopes to just server's
+# own graph, and it requires a clean node_modules first.
 #
 # tsx is deliberately NOT pruned: server/package.json lists it as a
 # production dependency (not dev) because the ENTRYPOINT below imports it
