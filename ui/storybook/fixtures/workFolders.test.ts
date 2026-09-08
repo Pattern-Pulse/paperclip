@@ -23,6 +23,17 @@ function operation(
 }
 
 describe("work-folder Storybook fixtures", () => {
+  it("handles the project page's workspace query without a backend", async () => {
+    const fixture = createWorkFolderFixture();
+    const response = await fixture.handle(
+      new Request(
+        "http://storybook.test/api/companies/company-storybook/execution-workspaces?projectId=project-board-ui",
+      ),
+    );
+    expect(response!.status).toBe(200);
+    expect(await response!.json()).toEqual([]);
+  });
+
   it("keeps uploads within one owner and resets them for the next story", async () => {
     const fixture = createWorkFolderFixture("empty");
     const bytes = new Uint8Array([0, 255, 128, 10]);

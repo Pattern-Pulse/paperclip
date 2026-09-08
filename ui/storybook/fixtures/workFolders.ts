@@ -128,6 +128,14 @@ export function createWorkFolderFixture(
   }
   async function handle(request: Request): Promise<Response | null> {
     const url = new URL(request.url);
+    // ProjectDetail loads this list even when its Files dialog is the review focus.
+    if (
+      request.method === "GET" &&
+      url.pathname ===
+        `/api/companies/${WORK_FOLDER_COMPANY}/execution-workspaces`
+    ) {
+      return Response.json([]);
+    }
     const match = url.pathname.match(
       /^\/api\/companies\/company-storybook\/work-folders\/(task|agent|user|project)\/([^/]+)(?:\/(content|operations|sync|refresh))?$/,
     );
