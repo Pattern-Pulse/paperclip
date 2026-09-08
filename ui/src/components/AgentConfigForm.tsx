@@ -9,6 +9,7 @@ import type {
   Agent,
   AdapterAuthSessionPrompt,
   AdapterAuthSessionStatus,
+  CodexAccountBindingClaim,
   AdapterEnvironmentTestResult,
   CompanySecret,
   EnvBinding,
@@ -597,6 +598,35 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
       ...buildAgentUpdatePatch(props.agent, nextOverlay),
       applyStoredClaudeLogin: true,
     });
+    invalidateUserSecretDefinitions();
+  };
+
+  // Edit mode: a Codex login that signed in to a DIFFERENT account than the
+  // company default cannot take effect through the shared company home — the
+  // promotion never displaces another account's claim there. Bind this
+  // agent's CODEX_HOME to the login's account-home secret and persist at
+  // once, the same one-step shape as the Claude stored-login bind above.
+  // Same-account logins skip the bind on purpose: the company-home refresh
+  // already carried them, and an unbound agent keeps following the company
+  // default across later credential rotations. No claim flag is needed —
+  // the secret already exists company-scoped, so this is an ordinary
+  // secret-reference binding through the normal agent-update patch.
+  const handleCodexAccountBindingEdit = async (claim: CodexAccountBindingClaim) => {
+    if (isCreate || !claim.companyIdentityDiffers) return;
+    const flushedEnv = flushEnvironmentDraft();
+    const baseEnv =
+      flushedEnv ??
+      (eff("adapterConfig", "env", (config.env ?? EMPTY_ENV) as Record<string, EnvBinding>));
+    const nextEnv: Record<string, EnvBinding> = {
+      ...baseEnv,
+      CODEX_HOME: { type: "secret_ref", secretId: claim.secretId, version: "latest" },
+    };
+    const nextOverlay: AgentConfigOverlay = {
+      ...overlay,
+      adapterConfig: { ...overlay.adapterConfig, env: nextEnv },
+    };
+    setOverlay(nextOverlay);
+    await props.onSave(buildAgentUpdatePatch(props.agent, nextOverlay));
     invalidateUserSecretDefinitions();
   };
 
@@ -1537,6 +1567,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
               onApplyStored={
                 isCreate ? handleApplyStoredClaudeLogin : handleApplyStoredClaudeLoginEdit
               }
+              onAccountBinding={isCreate ? undefined : handleCodexAccountBindingEdit}
             />
           )}
 
@@ -2117,6 +2148,15 @@ export type AdapterLoginDescriptor = {
 export type AdapterLoginPanelProps = AdapterLoginDescriptor & {
   onStored?: (storedSessionId: string) => void;
   onApplyStored?: () => void;
+  // Applies the non-secret Codex account-binding claim from an authenticated
+  // owner read: the company secret that names the signed-in account's own
+  // home. The panel calls this only when the company default home stayed on a
+  // DIFFERENT account — the one case where the login cannot take effect
+  // through the shared company home — and it AWAITS the handler, rendering
+  // saving/bound/failed states with an explicit Retry on failure, so a
+  // rejected save is never silently swallowed. The claim never carries a
+  // token byte or an account identifier.
+  onAccountBinding?: (claim: CodexAccountBindingClaim) => void | Promise<void>;
   // Start the login on mount instead of waiting for a press. The connect step's
   // footer button is the press — by the time the panel is rendered there, the
   // customer has already asked for this.
@@ -2178,6 +2218,7 @@ function DisplayedCodeLoginPanel({
   environmentId,
   autoStart,
   onConnected,
+  onAccountBinding,
   chrome = "panel",
   onPromptReady,
 }: AdapterLoginPanelProps) {
@@ -2187,6 +2228,12 @@ function DisplayedCodeLoginPanel({
   // it so a later poll that returns a null prompt does not hide the code and the
   // URL.
   const [latchedPrompt, setLatchedPrompt] = useState<AdapterAuthSessionPrompt | null>(null);
+  // The cross-account bind's own lifecycle (see the binding block below).
+  // Declared with the panel's state because `startDisabled` reads it: a
+  // saving bind blocks a new Sign in.
+  const [accountBindState, setAccountBindState] = useState<"idle" | "saving" | "bound" | "failed">(
+    "idle",
+  );
 
   // True for the session currently held in `sessionId` when it came from the
   // owner-scoped resume read rather than a fresh `startLogin`. It marks the
@@ -2202,6 +2249,9 @@ function DisplayedCodeLoginPanel({
       resumedRef.current = false;
       setStartError(null);
       setLatchedPrompt(null);
+      // A fresh login is a fresh bind decision: clear the previous session's
+      // bind narration so its outcome cannot masquerade as this session's.
+      setAccountBindState("idle");
       setSessionId(session.sessionId);
     },
     onError: (error) => {
@@ -2284,7 +2334,13 @@ function DisplayedCodeLoginPanel({
   const prompt = latchedPrompt;
   const isTerminal = status ? ADAPTER_LOGIN_TERMINAL_STATUSES.has(status) : false;
   const isActive = Boolean(sessionId) && !isTerminal;
-  const startDisabled = startLogin.isPending || isActive;
+  // A saving bind also blocks a new Sign in: the bind is an agent-update save,
+  // and a second login started while it is in flight could finish its own
+  // save first — the older save would then land last and silently revert the
+  // agent to the previous account while the panel reports the newer bind.
+  // Serializing at the only entry point is the whole fix; the panel has no
+  // other way to start a login mid-save.
+  const startDisabled = startLogin.isPending || isActive || accountBindState === "saving";
 
   // Adopt the caller's active session once, on mount. This is what makes a
   // page reload keep the session: with no local state at all, the panel would
@@ -2371,6 +2427,41 @@ function DisplayedCodeLoginPanel({
     connectedRef.current = true;
     onConnectedRef.current?.();
   }, [status]);
+
+  // Drive the account-binding hand-off as a visible state machine, not a
+  // fire-and-forget latch. The bind saves the agent, and the status poll
+  // stops at the terminal state — so a rejected save behind a silently
+  // latched claim would leave nothing to re-fire it and no way to retry.
+  // A cross-account claim moves saving → bound | failed, and failed renders
+  // an explicit Retry that re-runs the same handler with the same claim.
+  // Latched per SESSION, not per mount: the terminal state re-enables Sign in
+  // inside the same mounted panel, and a second cross-account login must run
+  // its own bind — a mount-scoped boolean would silently skip it and leave
+  // the agent on the previous account.
+  const accountBindSessionRef = useRef<string | null>(null);
+  const onAccountBindingRef = useRef(onAccountBinding);
+  onAccountBindingRef.current = onAccountBinding;
+  const accountBinding = statusQuery.data?.codexAccountBinding ?? null;
+  const runAccountBinding = useCallback(async (claim: CodexAccountBindingClaim) => {
+    const handler = onAccountBindingRef.current;
+    if (!handler) return;
+    setAccountBindState("saving");
+    try {
+      await handler(claim);
+      setAccountBindState("bound");
+    } catch {
+      setAccountBindState("failed");
+    }
+  }, []);
+  useEffect(() => {
+    if (status !== "authenticated" || !sessionId) return;
+    if (accountBindSessionRef.current === sessionId) return;
+    if (!accountBinding || !accountBinding.companyIdentityDiffers || !onAccountBindingRef.current) {
+      return;
+    }
+    accountBindSessionRef.current = sessionId;
+    void runAccountBinding(accountBinding);
+  }, [status, sessionId, accountBinding, runAccountBinding]);
 
   // Report the prompt's URL upward, the way the submitted-browser-code panel
   // does. The caller's loading beat ends when this arrives, so without it the
@@ -2533,6 +2624,41 @@ function DisplayedCodeLoginPanel({
 
         {isTerminal && status && (
           <AdapterLoginTerminalState status={status} message={session?.failure?.message ?? null} />
+        )}
+
+        {/* The cross-account bind's own state, below the login's success line.
+            The bind is a second, separate save — showing it as part of the
+            login would report success for a write that can still fail. */}
+        {status === "authenticated" && accountBindState === "saving" && (
+          <div className="flex items-center gap-2 text-(length:--text-micro) text-muted-foreground">
+            <Loader2 className="size-3 animate-spin shrink-0" />
+            <span>Binding this agent to the signed-in account...</span>
+          </div>
+        )}
+        {status === "authenticated" && accountBindState === "bound" && (
+          <div className="flex items-center gap-2 text-(length:--text-micro) text-foreground">
+            <Check className="size-3 shrink-0" />
+            <span>Agent bound to the signed-in account.</span>
+          </div>
+        )}
+        {status === "authenticated" && accountBindState === "failed" && (
+          <div className="flex items-center gap-2 text-(length:--text-micro)">
+            <TriangleAlert className="size-3 shrink-0 text-destructive" />
+            <span className="text-destructive">
+              Could not bind this agent to the signed-in account.
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={() => {
+                if (accountBinding) void runAccountBinding(accountBinding);
+              }}
+            >
+              Retry
+            </Button>
+          </div>
         )}
       </div>
     </div>
