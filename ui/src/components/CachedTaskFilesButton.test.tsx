@@ -6,8 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CachedTaskFilesButton } from "./CachedTaskFilesButton";
 
 vi.mock("@/components/WorkFolderBrowser", () => ({
-  WorkFolderBrowser: ({ owner, readOnly }: { owner: unknown; readOnly: boolean }) =>
-    <div data-testid="browser">{JSON.stringify({ owner, readOnly })}</div>,
+  WorkFolderBrowser: ({ owner, readOnly, allowTrashActions }: { owner: unknown; readOnly: boolean; allowTrashActions: boolean }) =>
+    <div data-testid="browser">{JSON.stringify({ owner, readOnly, allowTrashActions })}</div>,
 }));
 
 const issue = { id: "task-1", companyId: "company-1", projectId: "project-1", assigneeAgentId: "agent-1", responsibleUserId: "user-1" };
@@ -29,11 +29,11 @@ async function select(label: string) {
   await act(async () => { tab.focus(); });
 }
 describe("cached task context inspector", () => {
-  it("uses each task binding and exposes only inspection mode", async () => {
+  it("uses each task binding and allows trash actions without upload or refresh controls", async () => {
     await open();
     for (const [label, scope, ownerId] of [["Task", "task", "task-1"], ["Project", "project", "project-1"], ["Agent", "agent", "agent-1"], ["Responsible user", "user", "user-1"]]) {
       await select(label!);
-      expect(JSON.parse(document.querySelector('[data-testid="browser"]')!.textContent!)).toEqual({ owner: { companyId: "company-1", scope, ownerId }, readOnly: true });
+      expect(JSON.parse(document.querySelector('[data-testid="browser"]')!.textContent!)).toEqual({ owner: { companyId: "company-1", scope, ownerId }, readOnly: true, allowTrashActions: true });
     }
     expect(document.body.textContent).toContain("not the live sandbox filesystem");
   });

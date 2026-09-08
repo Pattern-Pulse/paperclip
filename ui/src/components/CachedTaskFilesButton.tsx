@@ -30,13 +30,13 @@ export function CachedTaskFilesButton({ issue, currentUserId }: { issue: TaskCon
           </TabsList>
           {folders.map(({ scope, label, ownerId }) => (
             <TabsContent key={scope} value={scope} className="flex min-h-0 flex-col gap-3 overflow-auto">
-              <p className="text-xs text-muted-foreground">Cached copy of $HOME/{scope}/ · Preview and download only</p>
+              <p className="text-xs text-muted-foreground">Cached copy of $HOME/{scope}/ · Select files to move to trash; restore them from the Trash tab</p>
               {!ownerId ? (
                 <p className="text-sm text-muted-foreground">No {label.toLowerCase()} is bound to this task. This folder is empty and unbound.</p>
               ) : scope === "user" && ownerId !== currentUserId ? (
                 <p className="text-sm text-muted-foreground">These cached files are private to the responsible user.</p>
               ) : (
-                <WorkFolderBrowser key={`${issue.companyId}:${scope}:${ownerId}`} owner={{ companyId: issue.companyId, scope, ownerId }} readOnly fillHeight />
+                <WorkFolderBrowser key={`${issue.companyId}:${scope}:${ownerId}`} owner={{ companyId: issue.companyId, scope, ownerId }} readOnly allowTrashActions fillHeight />
               )}
             </TabsContent>
           ))}

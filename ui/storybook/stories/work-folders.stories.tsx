@@ -19,7 +19,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "Editable stored-file browser prototype using disposable in-memory data. The experimental task inspector reuses this browser in read-only mode. Saved copies are not the live sandbox filesystem.",
+          "Editable stored-file browser prototype using disposable in-memory data. The experimental task inspector reuses this browser with selection, trash, and restore controls. Saved copies are not the live sandbox filesystem.",
       },
     },
   },
@@ -113,14 +113,14 @@ export const UploadFailed: Story = {
 export const Trash: Story = {
   play: async ({ canvasElement }) => {
     await userEvent.click(
-      await within(canvasElement).findByRole("button", { name: "Trash" }),
+      await within(canvasElement).findByRole("tab", { name: "Trash" }),
     );
   },
 };
 export const PurgeConfirmation: Story = {
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
-    await userEvent.click(await c.findByRole("button", { name: "Trash" }));
+    await userEvent.click(await c.findByRole("tab", { name: "Trash" }));
     await userEvent.click(await c.findByRole("button", { name: "Purge…" }));
   },
 };
@@ -142,11 +142,12 @@ export const UploadDeleteRestore: Story = {
       }),
     );
     await userEvent.click(await c.findByText("review.md"));
-    await userEvent.click(await c.findByRole("button", { name: "Delete" }));
-    await userEvent.click(c.getByRole("button", { name: "Trash" }));
+    await userEvent.click((await c.findByRole("treeitem", { name: "review.md" })).querySelector("input")!);
+    await userEvent.click(await c.findByRole("button", { name: "Move 1 file to trash" }));
+    await userEvent.click(c.getByRole("tab", { name: "Trash" }));
     const row = (await c.findByText("review.md")).parentElement!;
     await userEvent.click(within(row).getByRole("button", { name: "Restore" }));
-    await userEvent.click(c.getByRole("button", { name: "Back to files" }));
+    await userEvent.click(c.getByRole("tab", { name: "Files" }));
     await expect(await c.findByText("review.md")).toBeVisible();
   },
 };

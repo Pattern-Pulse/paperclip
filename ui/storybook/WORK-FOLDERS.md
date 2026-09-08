@@ -9,8 +9,9 @@ The default URL is `http://localhost:6006`.
 viewing cached task files** toggle under Paperclip Developer Mode. It defaults
 to off. **Task Page Cached Files** shows the enabled task properties: choose
 **View cached files**, then Task, Project, Agent, or Responsible user to preview
-and download their saved collections. The inspector is read-only and identifies
-the data as cached, potentially behind the sandbox disk. User scope follows the
+and download their saved collections. The inspector identifies the data as cached, potentially behind the sandbox disk.
+Select checkboxes to move files to retained trash; restore them from the Trash
+tab for that scope. User scope follows the
 task's responsible user and remains private to that user.
 
 Task Page and Mobile Task Page show the default, disabled state. Agent Page,
@@ -19,7 +20,7 @@ Live sandbox filesystem browsing remains a future feature.
 
 **Work folders / Stored-file prototype** retains the reusable browser for design
 reference only. Its editing controls are explicitly labeled as unshipped; the task inspector
-uses the same browser in read-only mode. It includes Markdown, code, image and empty-file
+uses the same browser with selection, trash, and restore controls. It includes Markdown, code, image and empty-file
 previews, unsupported/large-file messages, loading, empty, saving, failed-save,
 unavailable-storage, failed-upload, trash, and permanent-deletion states.
 

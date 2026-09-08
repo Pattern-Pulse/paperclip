@@ -140,8 +140,11 @@ assigned agent, and responsible user's saved collections. Missing bindings are
 empty; private user files are available only to that user. Existing server
 ownership checks apply independently of the visibility setting.
 
-The inspector is read-only and clearly identifies saved copies that can lag
-behind agent edits. It does not list repositories or the live sandbox disk.
+The inspector clearly identifies saved copies that can lag behind agent edits.
+Checkboxes select files; the move-to-trash action appears only for a nonempty
+selection. Each scope has Files and Trash tabs, with restoration from retained
+trash. Upload, folder creation, sandbox refresh, and permanent purge controls
+remain outside this inspector. It does not list repositories or the live sandbox disk.
 Agent, project, and profile pages have no standalone stored-file entry points.
 Live sandbox filesystem inspection remains a separate future feature. The
 editable stored-file browser remains in Storybook for design reference.
