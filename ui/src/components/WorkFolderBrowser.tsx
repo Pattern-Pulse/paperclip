@@ -8,6 +8,7 @@ import { FileContentViewer } from "@/components/FileViewerSheet";
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
 
 function tree(files: WorkFile[]) {
@@ -29,7 +30,7 @@ function tree(files: WorkFile[]) {
   sort(root.children); return root.children;
 }
 
-export function WorkFolderBrowser({ owner, exampleFiles, readOnly = false }: { owner: WorkFolderOwner; exampleFiles?: WorkFile[]; readOnly?: boolean }) {
+export function WorkFolderBrowser({ owner, exampleFiles, readOnly = false, fillHeight = false }: { owner: WorkFolderOwner; exampleFiles?: WorkFile[]; readOnly?: boolean; fillHeight?: boolean }) {
   const queryClient = useQueryClient();
   const [trash, setTrash] = useState(false);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -66,8 +67,8 @@ export function WorkFolderBrowser({ owner, exampleFiles, readOnly = false }: { o
   const lastOperation = filesQuery.data?.lastOperationAt;
   const saveFailed = Boolean(failed) || mutation.isError;
   const disabled = mutation.isPending || Boolean(exampleFiles);
-  return <div className="flex min-h-0 flex-col gap-3">
-    <div className="flex flex-wrap items-center gap-2">
+  return <div className={cn("flex min-h-0 flex-col gap-3", fillHeight && "flex-1")}>
+    <div className="flex shrink-0 flex-wrap items-center gap-2">
       {!readOnly && <><Button variant="outline" size="sm" disabled={disabled || trash} onClick={() => fileInput.current?.click()}><Upload aria-hidden />Upload</Button>
       <input ref={fileInput} className="hidden" aria-label="Upload work files" type="file" multiple onChange={(event) => {
         const chosen = Array.from(event.currentTarget.files ?? []); event.currentTarget.value = "";
@@ -86,15 +87,15 @@ export function WorkFolderBrowser({ owner, exampleFiles, readOnly = false }: { o
     {[filesQuery.error, syncQuery.error, mutation.error].filter(Boolean).map((error, index) => <p key={index} role="alert" className="text-sm text-destructive">{(error as Error).message}</p>)}
     {failed && <p role="alert" className="text-sm text-destructive">{failed.error}</p>}
     <p className="sr-only" aria-live="polite">{announcement}</p>
-    {trash ? <div className="max-h-96 overflow-auto">{files.length === 0 ? <p className="text-sm text-muted-foreground">Trash is empty.</p> : files.map((file) => <div key={file.id} className="flex items-center gap-2 border-b py-2">
+    {trash ? <div className={cn("overflow-auto", fillHeight ? "min-h-0 flex-1" : "max-h-96")}>{files.length === 0 ? <p className="text-sm text-muted-foreground">Trash is empty.</p> : files.map((file) => <div key={file.id} className="flex items-center gap-2 border-b py-2">
       <span className="min-w-0 flex-1 truncate text-sm">{file.path}</span>{!readOnly && <><Button size="sm" variant="outline" disabled={disabled} onClick={() => mutation.mutate({ type: "restore", fileId: file.id })}><RotateCcw aria-hidden />Restore</Button>
       <AlertDialog><AlertDialogTrigger asChild><Button size="sm" variant="ghost" disabled={disabled}>Purge…</Button></AlertDialogTrigger>
         <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Permanently delete {file.path}?</AlertDialogTitle>
           <AlertDialogDescription>This deleted copy and its deleted children will no longer be recoverable.</AlertDialogDescription></AlertDialogHeader>
           <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => mutation.mutate({ type: "purge", fileId: file.id })}>Permanently delete</AlertDialogAction></AlertDialogFooter>
         </AlertDialogContent></AlertDialog></>}
-    </div>)}</div> : <div className="grid min-h-0 gap-3 md:grid-cols-3">
-      <div className="max-h-96 overflow-auto rounded-md border"><FileTree nodes={nodes} selectedFile={selectedPath} expandedDirs={expanded}
+    </div>)}</div> : <div className={cn("grid min-h-0 gap-3 md:grid-cols-3", fillHeight && "flex-1 grid-rows-2 md:grid-rows-1")}>
+      <div className={cn("min-h-0 overflow-auto rounded-md border", !fillHeight && "max-h-96")}><FileTree nodes={nodes} selectedFile={selectedPath} expandedDirs={expanded}
         onToggleDir={(filePath) => { setSelectedPath(filePath); setExpanded((before) => { const next = new Set(before); if (next.has(filePath)) next.delete(filePath); else next.add(filePath); return next; }); }}
         onSelectFile={setSelectedPath} loading={!exampleFiles && filesQuery.isLoading} empty={{ title: "No files yet", description: readOnly ? "No cached files have been saved for this scope." : "Upload files here, or create them during a sandbox run." }} ariaLabel={`${owner.scope} files`} /></div>
       <div className="flex min-h-0 flex-col gap-2 md:col-span-2">
@@ -102,7 +103,7 @@ export function WorkFolderBrowser({ owner, exampleFiles, readOnly = false }: { o
           {selected.kind === "file" && !exampleFiles && <Button asChild size="sm" variant="outline"><a href={workFoldersApi.downloadUrl(owner, selected.path)} download><Download aria-hidden />Download</a></Button>}
           {!readOnly && <Button size="sm" variant="outline" disabled={disabled} onClick={() => mutation.mutate({ type: "delete", path: selected.path })}><Trash2 aria-hidden />Delete</Button>}</div>}
         {preview.isLoading ? <p className="text-sm text-muted-foreground">Loading preview…</p> : preview.error ? <p role="alert" className="text-sm text-muted-foreground">{preview.error.message}</p> : preview.data ?
-          <div className="flex max-h-96 min-h-0 flex-col overflow-auto rounded-md border"><FileContentViewer content={preview.data} highlightedLine={null} /></div> : <p className="text-sm text-muted-foreground">Select a file to preview it.</p>}
+          <div className={cn("flex min-h-0 flex-col overflow-auto rounded-md border", fillHeight ? "flex-1" : "max-h-96")}><FileContentViewer content={preview.data} highlightedLine={null} /></div> : <p className="text-sm text-muted-foreground">Select a file to preview it.</p>}
       </div>
     </div>}
   </div>;
