@@ -5,6 +5,7 @@ export function repoAcceptanceScript(nonce: string, warm: boolean): string {
     'for folder in task agent user project repos .codex .cache; do test -d "$HOME/$folder"; done',
     'count=0', 'for repo in "$HOME"/repos/*; do',
     '  test -d "$repo/.git" || continue', '  count=$((count + 1))', '  name=$(basename "$repo")',
+    '  git -C "$repo" ls-remote --exit-code origin HEAD >/dev/null',
   ];
   const repoSteps = warm ? [
     `  test "$(git -C "$repo" show HEAD:.acceptance-owner)" = '${nonce}'`,
@@ -52,7 +53,7 @@ export function repoAcceptanceScript(nonce: string, warm: boolean): string {
 
 export function repoAcceptancePrompt(nonce: string, warm: boolean): string {
   return [
-    "Execute this exact acceptance shell script from your initial working directory in one tool call. Use real filesystem tools; do not simulate its result.",
+    "Execute this exact acceptance shell script from your initial working directory in one tool call. Use real filesystem tools; do not simulate its result. Do not change PATH, bypass the managed git launcher, extract credentials, repair partial state, or retry after any failed command. If anything fails, immediately stop and mark the task blocked as instructed.",
     warm ? "This must reuse the same warm sandbox. Do not repair, recreate, or reset missing state." : "This creates disposable local commits and staged, unstaged, and untracked test files. Do not push.",
     'If any assertion fails, stop and PATCH the task with status "blocked" and unblockDescriptor {"owner":{"agentId":"<your PAPERCLIP_AGENT_ID>"},"action":"Investigate the failed acceptance assertion"}, replacing the placeholder with your agent ID and including the actual error in your comment. Otherwise mark the Paperclip task done after the script succeeds.',
     "```sh", repoAcceptanceScript(nonce, warm), "```",

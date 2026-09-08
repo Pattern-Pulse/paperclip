@@ -17,6 +17,7 @@ beforeAll(async () => {
     await fs.writeFile(path.join(repo, "README"), "fixture");
     await exec("git", ["-C", repo, "add", "README"]);
     await exec("git", ["-C", repo, "-c", "user.name=Acceptance", "-c", "user.email=acceptance@example.invalid", "commit", "-m", "fixture"]);
+    await exec("git", ["-C", repo, "remote", "add", "origin", repo]);
     await fs.writeFile(path.join(repo, ".acceptance-setup-count"), "initialized\n");
   }
 });
@@ -25,6 +26,11 @@ it("proves actual warm state and fails instead of repairing lost files", async (
   const nonce = randomUUID();
   const run = (warm: boolean) => exec("/bin/sh", ["-c", repoAcceptanceScript(nonce, warm)], { cwd: root, env: { ...process.env, HOME: root,
     GIT_AUTHOR_NAME: "", GIT_AUTHOR_EMAIL: "", GIT_COMMITTER_NAME: "", GIT_COMMITTER_EMAIL: "" } });
+  const firstRepo = path.join(root, "repos", "first repo");
+  await exec("git", ["-C", firstRepo, "remote", "set-url", "origin", path.join(root, "missing-origin")]);
+  await expect(run(false)).rejects.toThrow();
+  await expect(fs.access(path.join(firstRepo, ".acceptance-owner"))).rejects.toThrow();
+  await exec("git", ["-C", firstRepo, "remote", "set-url", "origin", firstRepo]);
   expect((await run(false)).stdout).toContain("ACCEPTANCE_SCRIPT_PASSED");
   expect((await run(true)).stdout).toContain("ACCEPTANCE_SCRIPT_PASSED");
   for (const scope of ["task", "agent", "user", "project"]) {
