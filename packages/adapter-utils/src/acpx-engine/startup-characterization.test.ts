@@ -332,6 +332,24 @@ describe("ACPX engine startup characterization", () => {
       });
       expect(result.exitCode).toBe(0);
       expect(stdout).toBe("managed-git");
+
+      expect(launchPayload!.args[0]).toBe("-lc");
+      // Emulate a login profile that initializes a custom runtime and replaces
+      // PATH. Its additional executable and initialization must remain usable.
+      const profileBin = path.join(root, "profile-bin");
+      await fs.mkdir(profileBin);
+      await fs.writeFile(path.join(profileBin, "custom-runtime"),
+        '#!/bin/sh\ntest "$PROFILE_RUNTIME_READY" = yes || exit 9\ngit', { mode: 0o700 });
+      const profile = `export PROFILE_RUNTIME_READY=yes\nexport PATH='${profileBin}:/usr/bin:/bin'\n`;
+      const runtimeCommand = launchPayload!.args[1]!.replace(/exec git$/, "exec custom-runtime");
+      stdout = "";
+      const customResult = await runChildProcess("profile-git-launch", launchPayload!.command,
+        [launchPayload!.args[0]!, profile + runtimeCommand], {
+          cwd: root, env: launchPayload!.env, timeoutSec: 5, graceSec: 1,
+          onLog: async (stream, chunk) => { if (stream === "stdout") stdout += chunk; },
+        });
+      expect(customResult.exitCode).toBe(0);
+      expect(stdout).toBe("managed-git");
     });
   });
 

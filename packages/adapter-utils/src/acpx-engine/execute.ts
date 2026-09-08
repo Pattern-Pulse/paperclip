@@ -2277,9 +2277,14 @@ async function buildRuntime(input: {
           runtimeRootDir,
           adapterKey: input.engine.adapterType,
           command: "sh",
-          // The host has already projected the managed Git PATH. A login shell
-          // can replace it from /etc/profile before the agent even starts.
-          args: [env.PAPERCLIP_GITHUB_LAUNCHER_DIR ? "-c" : "-lc", `exec ${agentCommandShell}`],
+          // Keep login initialization for custom runtimes, then restore the
+          // projected Git PATH ahead of any paths added by the login profile.
+          args: ["-lc", [
+            ...(env.PAPERCLIP_GITHUB_LAUNCHER_DIR
+              ? [`export PATH=${shellQuote(env.PATH || env.PAPERCLIP_GITHUB_LAUNCHER_DIR)}:"$PATH"`]
+              : []),
+            `exec ${agentCommandShell}`,
+          ].join("\n")],
           cwd: sessionCwd,
           env: launchEnv,
           timeoutSec,
