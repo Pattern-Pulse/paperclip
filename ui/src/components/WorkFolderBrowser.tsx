@@ -143,7 +143,7 @@ export function WorkFolderBrowser({ owner, exampleFiles, readOnly = false, fillH
         {selected && <div className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate text-sm">{selected.path}</span>
           {selected.kind === "file" && !exampleFiles && <Button asChild size="sm" variant="outline"><a href={workFoldersApi.downloadUrl(owner, selected.path)} download><Download aria-hidden />Download</a></Button>}
           </div>}
-        {preview.isLoading ? <p className="text-sm text-muted-foreground">Loading preview…</p> : preview.error ? <p role="alert" className="text-sm text-muted-foreground">{preview.error.message}</p> : preview.data ?
+        {preview.isLoading || (preview.isFetching && preview.isError) ? <p className="text-sm text-muted-foreground">Loading preview…</p> : preview.error ? <p role="alert" className="text-sm text-muted-foreground">{preview.error.message}</p> : preview.data ?
           <div className={cn("flex min-h-0 flex-col overflow-auto rounded-md border", fillHeight ? "flex-1" : "max-h-96")}><FileContentViewer content={preview.data} highlightedLine={null} /></div> : <p className="text-sm text-muted-foreground">Select a file to preview it.</p>}
       </div>
     </TabsContent>}
