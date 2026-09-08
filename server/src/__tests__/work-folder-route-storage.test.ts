@@ -40,3 +40,26 @@ it("initializes storage only after access succeeds and reuses it while checking 
   expect(mocks.access).toHaveBeenCalledTimes(4);
   expect(mocks.list).toHaveBeenCalledTimes(2);
 });
+
+it.each(["same-sandbox", "replacement-sandbox"])("keeps the last successful save visible after an interrupted run on %s", async (sandboxKey) => {
+  const oldSave = {
+    folderRun: { runId: "saved-run", manifest: { agentId: "agent", sandboxKey: "same-sandbox" },
+      state: "saved", lastSavedAt: new Date("2026-09-08T12:00:00Z"), error: null, refreshRequested: false },
+    status: "succeeded",
+  };
+  const interrupted = {
+    folderRun: { runId: "interrupted-run", manifest: { agentId: "agent", sandboxKey },
+      state: "starting", lastSavedAt: null, error: null, refreshRequested: false },
+    status: "failed",
+  };
+  const query = { from: () => query, innerJoin: () => query, where: () => query,
+    orderBy: () => query, limit: async () => [interrupted, oldSave] };
+  const app = express();
+  app.use("/api", workFolderRoutes({ select: () => query } as unknown as Db));
+  const response = await request(app).get("/api/companies/11111111-1111-4111-8111-111111111111/work-folders/task/22222222-2222-4222-8222-222222222222/sync").expect(200);
+  expect(response.body).toEqual([
+    expect.objectContaining({ runId: "interrupted-run", state: "failed", active: false,
+      error: "Run ended before its final file save completed.", lastSavedAt: null }),
+    expect.objectContaining({ runId: "saved-run", state: "saved", lastSavedAt: "2026-09-08T12:00:00.000Z" }),
+  ]);
+});

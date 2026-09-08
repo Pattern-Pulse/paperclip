@@ -228,7 +228,9 @@ Native continuation validates the full control-plane journal with the same
 2 MiB without invalidating its identity. Oversized, malformed, foreign-session,
 and unverifiable state still fail closed and remain recoverable in quarantine.
 The cached-file routes initialize storage once per router after authorization;
-every request still checks current owner access.
+every request still checks current owner access. If a run ends while its save is
+starting or in progress, the inspector reports the interruption and keeps the
+previous successful save time visible, including across sandbox replacement.
 
 Passing acceptance does not authorize a merge or mainline release. Both require
 the user's explicit sign-off.

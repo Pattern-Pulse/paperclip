@@ -86,19 +86,31 @@ export function workFolderRoutes(db: Db, provider?: StorageProvider) {
       .where(and(eq(workFolderRuns.companyId, owner.companyId),
         sql`${workFolderRuns.manifest}->'folders'->>${owner.scope} = ${folder.id}`))
       .orderBy(desc(workFolderRuns.updatedAt)).limit(100);
+    const isActive = (status: string) => status === "running" || status === "queued";
+    const latestCompletedSave = rows.filter(({ folderRun, status }) =>
+      !isActive(status) && folderRun.state === "saved" && folderRun.lastSavedAt !== null)
+      .sort((a, b) => b.folderRun.lastSavedAt!.getTime() - a.folderRun.lastSavedAt!.getTime())[0];
+    const projectStatus = ({ folderRun: row, status }: typeof rows[number]) => {
+      const active = isActive(status);
+      const interrupted = !active && (row.state === "starting" || row.state === "saving");
+      return { runId: row.runId, agentId: row.manifest.agentId, state: interrupted ? "failed" : row.state,
+        lastSavedAt: row.lastSavedAt, error: interrupted ? row.error ?? "Run ended before its final file save completed." : row.error,
+        refreshRequested: row.refreshRequested, active };
+    };
     const leases = new Set<string>();
-    let includedCompletedSave = false;
-    res.json(rows.flatMap(({ folderRun: row, status }) => {
+    const statuses = rows.flatMap((entry) => {
+      const row = entry.folderRun;
       if (leases.has(row.manifest.sandboxKey)) return [];
       leases.add(row.manifest.sandboxKey);
-      const active = status === "running" || status === "queued";
-      if (!active && row.state !== "failed") {
-        if (includedCompletedSave) return [];
-        includedCompletedSave = true;
-      }
-      return [{ runId: row.runId, agentId: row.manifest.agentId, state: row.state, lastSavedAt: row.lastSavedAt, error: row.error,
-        refreshRequested: row.refreshRequested, active }];
-    }));
+      if (!isActive(entry.status) && row.state === "saved" && row.runId !== latestCompletedSave?.folderRun.runId) return [];
+      return [projectStatus(entry)];
+    });
+    // A failed replacement or later run must not erase the last successful
+    // checkpoint, including when both runs share the same physical sandbox.
+    if (latestCompletedSave && !statuses.some((status) => status.runId === latestCompletedSave.folderRun.runId)) {
+      statuses.push(projectStatus(latestCompletedSave));
+    }
+    res.json(statuses);
   });
   router.post(`${base}/refresh`, async (req, res) => {
     const owner = ownerSchema.parse(req.params);
