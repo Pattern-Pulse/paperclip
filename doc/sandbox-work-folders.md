@@ -176,7 +176,10 @@ the user's explicit sign-off.
 Staging migrator artifacts use an immutable object-storage prefix. The Docker
 workflow's optional `staging_artifact_base_url` input builds DB/shared tarballs
 and an integrity manifest as a GitHub Actions artifact; it has no release-write
-permission. Transfer those artifacts to the staging bucket using conditional
+permission. Supply `staging_lock_sha256` with the reviewed SHA-256 of the
+resolved pnpm 9.15.4 lockfile. The migrator and both app-image builds verify
+that digest before installing dependencies, failing if registry resolution
+has changed. Transfer those artifacts to the staging bucket using conditional
 creates, publishing the manifest last. Do not create GitHub releases or publish
 npm packages for this flow.
 

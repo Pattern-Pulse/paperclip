@@ -19,6 +19,11 @@ on:
         type: string
         default: ""
 
+      staging_lock_sha256:
+        description: Reviewed SHA-256 of the resolved pnpm 9 lockfile; required with staging_artifact_base_url
+        type: string
+        default: ""
+
 permissions:
   contents: read
   packages: write
@@ -52,8 +57,14 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-      - name: Resolve branch manifest changes before the frozen install
-        run: pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile
+      - name: Resolve and verify staging dependencies before installation
+        env:
+          EXPECTED_LOCK_SHA256: ${{ inputs.staging_lock_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_LOCK_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile
+          echo "$EXPECTED_LOCK_SHA256  pnpm-lock.yaml" | sha256sum --check --strict
       - run: pnpm install --frozen-lockfile
       - name: Build matching migrator artifacts
         env:
@@ -125,9 +136,17 @@ jobs:
           node-version: 24
 
       - name: Refresh lockfile for Docker build context
+        env:
+          STAGING_ARTIFACT_BASE_URL: ${{ inputs.staging_artifact_base_url }}
+          EXPECTED_LOCK_SHA256: ${{ inputs.staging_lock_sha256 }}
         run: |
           set -euo pipefail
           pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile
+
+          if [ -n "$STAGING_ARTIFACT_BASE_URL" ]; then
+            [[ "$EXPECTED_LOCK_SHA256" =~ ^[a-f0-9]{64}$ ]]
+            echo "$EXPECTED_LOCK_SHA256  pnpm-lock.yaml" | sha256sum --check --strict
+          fi
 
           changed="$(git status --porcelain)"
           if [ -z "$changed" ]; then
@@ -319,9 +338,17 @@ jobs:
           node-version: 24
 
       - name: Refresh lockfile for Docker build context
+        env:
+          STAGING_ARTIFACT_BASE_URL: ${{ inputs.staging_artifact_base_url }}
+          EXPECTED_LOCK_SHA256: ${{ inputs.staging_lock_sha256 }}
         run: |
           set -euo pipefail
           pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile
+
+          if [ -n "$STAGING_ARTIFACT_BASE_URL" ]; then
+            [[ "$EXPECTED_LOCK_SHA256" =~ ^[a-f0-9]{64}$ ]]
+            echo "$EXPECTED_LOCK_SHA256  pnpm-lock.yaml" | sha256sum --check --strict
+          fi
 
           changed="$(git status --porcelain)"
           if [ -z "$changed" ]; then
