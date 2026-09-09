@@ -40,23 +40,33 @@ async function fixture() {
     status: () => 200,
     text: async () => "T1-nonce\n",
   };
+  const fullRun = {
+    id: "run",
+    companyId: "company",
+    agentId: "agent",
+    contextSnapshot: { paperclipWorkFolders: binding } as Record<
+      string,
+      unknown
+    > | null,
+  };
   const api = {
-    get: vi.fn().mockResolvedValue([saved]),
+    get: vi
+      .fn()
+      .mockImplementation(async (url: string) =>
+        url === "/api/heartbeat-runs/run" ? fullRun : [saved],
+      ),
     request: { get: vi.fn().mockResolvedValue(response) },
   };
   return {
     input: {
       api,
-      run: {
-        id: "run",
-        companyId: "company",
-        agentId: "agent",
-        contextSnapshot: { paperclipWorkFolders: binding },
-      },
+      run: { id: "run", companyId: "company", agentId: "agent" },
       issueId: "task",
       workspacePath,
       filename: "daytona-warm-nonce.txt",
     },
+    fullRun,
+    binding,
     saved,
   };
 }
@@ -75,16 +85,13 @@ describe("warm workspace persistence observation", () => {
         daytonaWarmContinuityTask.buildPrompt("nonce"),
         ...daytonaWarmContinuityTask.buildFollowupMessages!("nonce"),
       ];
-      for (const [index, prompt] of prompts.entries()) {
-        const shellPath = prompt.match(
-          /Use ("[^"\n]+") for every read and write\./,
-        )?.[1];
-        expect(shellPath).toBeTruthy();
-        await promisify(execFile)(
-          "sh",
-          ["-c", `printf 'T${index + 1}-nonce\\n' >> ${shellPath}`],
-          { cwd: input.workspacePath, env },
-        );
+      for (const prompt of prompts) {
+        const script = prompt.match(/```sh\n([\s\S]*?)\n```/)?.[1];
+        expect(script).toBeTruthy();
+        await promisify(execFile)("sh", ["-c", script!], {
+          cwd: input.workspacePath,
+          env,
+        });
       }
       expect(
         await readFile(
@@ -102,7 +109,48 @@ describe("warm workspace persistence observation", () => {
     },
   );
 
-  it("reads the saved scoped file without requiring a mirrored host file", async () => {
+  it.each([undefined, "wrong\n", "T1-nonce", "T1-nonce\n\n"])(
+    "rejects missing or changed prior content without repairing it: %j",
+    async (prior) => {
+      const { input } = await fixture();
+      const filename = path.join(input.workspacePath, input.filename);
+      if (prior !== undefined) await writeFile(filename, prior);
+      const prompt =
+        daytonaWarmContinuityTask.buildFollowupMessages!("nonce")[0]!;
+      const script = prompt.match(/```sh\n([\s\S]*?)\n```/)![1]!;
+      await expect(
+        promisify(execFile)("sh", ["-c", script], {
+          cwd: input.workspacePath,
+          env: { ...process.env, PAPERCLIP_TASK_DIR: input.workspacePath },
+        }),
+      ).rejects.toThrow();
+      if (prior === undefined) {
+        await expect(readFile(filename)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      } else {
+        expect(await readFile(filename, "utf8")).toBe(prior);
+      }
+    },
+  );
+
+  it("rejects repeating the initial write without truncating saved work", async () => {
+    const { input } = await fixture();
+    const filename = path.join(input.workspacePath, input.filename);
+    await writeFile(filename, "T1-nonce\n");
+    const script = daytonaWarmContinuityTask
+      .buildPrompt("nonce")
+      .match(/```sh\n([\s\S]*?)\n```/)![1]!;
+    await expect(
+      promisify(execFile)("sh", ["-c", script], {
+        cwd: input.workspacePath,
+        env: { ...process.env, PAPERCLIP_TASK_DIR: input.workspacePath },
+      }),
+    ).rejects.toThrow();
+    expect(await readFile(filename, "utf8")).toBe("T1-nonce\n");
+  });
+
+  it("hydrates an abbreviated run before reading scoped bytes without a host mirror", async () => {
     const { input } = await fixture();
     expect(await readWarmWorkspaceFile(input)).toEqual({
       source: "task-cache",
@@ -131,6 +179,27 @@ describe("warm workspace persistence observation", () => {
     );
   });
 
+  it("does not infer an unscoped run from another abbreviated API response", async () => {
+    const { input } = await fixture();
+    input.api.get.mockResolvedValue(input.run);
+    await writeFile(
+      path.join(input.workspacePath, input.filename),
+      "stale host copy",
+    );
+    await expect(readWarmWorkspaceFile(input)).rejects.toThrow(
+      "Full run context is required",
+    );
+    expect(input.api.request.get).not.toHaveBeenCalled();
+  });
+
+  it("rejects a full response for a different run", async () => {
+    const { input, fullRun } = await fixture();
+    fullRun.id = "different-run";
+    await expect(readWarmWorkspaceFile(input)).rejects.toThrow();
+    expect(input.api.get).toHaveBeenCalledTimes(1);
+    expect(input.api.request.get).not.toHaveBeenCalled();
+  });
+
   it.each([
     { runId: "older-run" },
     { state: "failed" },
@@ -141,7 +210,7 @@ describe("warm workspace persistence observation", () => {
     "rejects incomplete or unrelated checkpoint evidence: %j",
     async (override) => {
       const { input, saved } = await fixture();
-      input.api.get.mockResolvedValue([{ ...saved, ...override }]);
+      Object.assign(saved, override);
       await expect(readWarmWorkspaceFile(input)).rejects.toThrow(
         "successful final file save",
       );
@@ -152,26 +221,25 @@ describe("warm workspace persistence observation", () => {
   it.each(["runId", "companyId", "agentId", "taskId"] as const)(
     "rejects a manifest with a different %s",
     async (field) => {
-      const { input } = await fixture();
-      input.run.contextSnapshot.paperclipWorkFolders[field] = "other";
+      const { input, binding } = await fixture();
+      binding[field] = "other";
       await expect(readWarmWorkspaceFile(input)).rejects.toThrow();
-      expect(input.api.get).not.toHaveBeenCalled();
+      expect(input.api.get).toHaveBeenCalledTimes(1);
     },
   );
 
   it("keeps the host workspace contract when the run has no scoped manifest", async () => {
-    const { input } = await fixture();
+    const { input, fullRun } = await fixture();
+    fullRun.contextSnapshot = null;
     await writeFile(
       path.join(input.workspacePath, input.filename),
       "T1-local\n",
     );
-    expect(
-      await readWarmWorkspaceFile({
-        ...input,
-        run: { ...input.run, contextSnapshot: null },
-      }),
-    ).toEqual({ source: "host-workspace", content: "T1-local\n" });
-    expect(input.api.get).not.toHaveBeenCalled();
+    expect(await readWarmWorkspaceFile(input)).toEqual({
+      source: "host-workspace",
+      content: "T1-local\n",
+    });
+    expect(input.api.get).toHaveBeenCalledTimes(1);
     expect(input.api.request.get).not.toHaveBeenCalled();
   });
 });

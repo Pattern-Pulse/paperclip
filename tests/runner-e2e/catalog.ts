@@ -776,6 +776,26 @@ function warmWorkspaceLine(turn: 1 | 2 | 3, nonce: string) {
   return `T${turn}-${nonce}`;
 }
 
+function warmWorkspaceScript(turn: 1 | 2 | 3, nonce: string) {
+  if (!/^[a-zA-Z0-9-]+$/.test(nonce)) {
+    throw new Error("Invalid warm fixture nonce");
+  }
+  const lines = Array.from({ length: turn }, (_, index) =>
+    warmWorkspaceLine((index + 1) as 1 | 2 | 3, nonce),
+  );
+  const expected = (values: string[]) =>
+    `printf '%s\\n' ${values.map((line) => `'${line}'`).join(" ")}`;
+  return [
+    "set -eu",
+    `target="\${PAPERCLIP_TASK_DIR:-$PWD}/daytona-warm-${nonce}.txt"`,
+    turn === 1
+      ? '[ ! -e "$target" ]'
+      : `${expected(lines.slice(0, -1))} | cmp - "$target"`,
+    `${expected([lines.at(-1)!])} >> "$target"`,
+    `${expected(lines)} | cmp - "$target"`,
+  ].join("\n");
+}
+
 function warmTurnInstructions(turn: 1 | 2 | 3, nonce: string) {
   const file = `"\${PAPERCLIP_TASK_DIR:-$PWD}/daytona-warm-${nonce}.txt"`;
   const lines = Array.from({ length: turn }, (_, index) =>
@@ -789,9 +809,13 @@ function warmTurnInstructions(turn: 1 | 2 | 3, nonce: string) {
   return [
     `This is warm Daytona continuity turn ${turn} of 3. Use ${file} for every read and write. Expand this shell path inside each tool invocation; do not rely on a directory change in a previous shell call. The host-supplied task folder takes precedence over the current directory.`,
     turn === 1
-      ? `Create ${file} with exactly this one line followed by a newline: ${lines[0]}`
-      : `Before changing anything, read ${file} and verify its content is exactly ${lines.slice(0, -1).join("\\n")} followed by a newline. Then append exactly ${lines.at(-1)} followed by a newline.`,
-    `After the write, verify ${file} contains exactly these lines, once each and in order: ${lines.join(" | ")}.`,
+      ? `The script below creates ${file} with exactly this one line followed by a newline: ${lines[0]}`
+      : `The script below first checks ${file} contains exactly ${lines.slice(0, -1).join("\\n")} followed by a newline, then appends exactly ${lines.at(-1)} followed by a newline.`,
+    `The final comparison requires ${file} to contain exactly these lines, once each and in order: ${lines.join(" | ")}.`,
+    "Execute this exact shell script once for the file operation and verification. It compares every byte, including the final newline; do not add guessed byte counts. If it fails, report the failure and do not repair the file or claim success. Only after it succeeds perform the runner-specific completion below.",
+    "```sh",
+    warmWorkspaceScript(turn, nonce),
+    "```",
     `In a native runner, call paperclip_finish exactly once with {reportedWorkDisposition:"${finalTurn ? "done" : "needs_review"}",summary:"${marker}",completionClaim:{contractRevision:"1",objectiveSatisfied:true,criteria:[{criterionId:"objective",status:"satisfied",evidenceRefs:[]}],remainingWork:[]},evidence:[],verification:[{commandOrCheck:${JSON.stringify(`read ${file}`)},status:"passed"}]}. Wait for that tool call to succeed, then emit exactly ${marker} once as the complete user-facing final response.`,
     legacyCompletion,
     `In a legacy runner, the PATCH comment is the complete visible response. After its 2xx response, finish silently: do not print, echo, or emit ${marker} again as assistant text.`,

@@ -16,7 +16,6 @@ export async function readWarmWorkspaceFile(input: {
     id: string;
     companyId: string;
     agentId: string;
-    contextSnapshot?: Record<string, unknown> | null;
   };
   issueId: string;
   workspacePath: string;
@@ -27,7 +26,27 @@ export async function readWarmWorkspaceFile(input: {
     /^[a-zA-Z0-9-]+\.txt$/.test(filename),
     "Invalid warm fixture filename",
   );
-  const manifest = run.contextSnapshot?.paperclipWorkFolders;
+  // Company run listings summarize context. Absence there cannot establish
+  // that the run uses the legacy host-workspace contract.
+  const fullRun = await api.get<
+    typeof run & {
+      contextSnapshot: Record<string, unknown> | null;
+    }
+  >(`/api/heartbeat-runs/${encodeURIComponent(run.id)}`);
+  assert.equal(fullRun.id, run.id);
+  assert.equal(fullRun.companyId, run.companyId);
+  assert.equal(fullRun.agentId, run.agentId);
+  assert(
+    Object.hasOwn(fullRun, "contextSnapshot"),
+    "Full run context is required",
+  );
+  assert(
+    fullRun.contextSnapshot === null ||
+      (typeof fullRun.contextSnapshot === "object" &&
+        !Array.isArray(fullRun.contextSnapshot)),
+    "Invalid full run context",
+  );
+  const manifest = fullRun.contextSnapshot?.paperclipWorkFolders;
   if (manifest === undefined || manifest === null) {
     return {
       source: "host-workspace",
