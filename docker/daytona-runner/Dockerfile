@@ -44,7 +44,9 @@ RUN pnpm --filter @paperclipai/paperclip-runner build:typescript \
 
 # The trusted qualification entry exports the identical canonical provider stage.
 FROM scratch AS provider-pack-export
-COPY --from=provider-pack-build /provider-pack /
+# Keep the pack beneath the exporter-owned outer directory: BuildKit gives
+# that directory host-local permissions rather than the source root's mode.
+COPY --from=provider-pack-build /provider-pack /provider-pack
 
 # Fleet sandbox base image. Keep this section aligned with
 # paperclipai/paperclip-cloud/fleet-sandbox-image/Dockerfile. The only Paperclip

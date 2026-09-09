@@ -48,12 +48,12 @@ export function buildProviderPack({ workspaceRoot = defaultWorkspaceRoot, output
   // Same filesystem as OUTPUT, so successful publication is an atomic rename.
   // Docker reads its inputs before this empty directory receives exported files.
   const temporaryParent = mkdtempSync(join(dirname(outputRoot), ".paperclip-provider-pack-"));
-  const exported = join(temporaryParent, "exported"), backup = join(temporaryParent, "previous");
+  const exportRoot = join(temporaryParent, "exported"), exported = join(exportRoot, "provider-pack"), backup = join(temporaryParent, "previous");
   let previousMoved = false, published = false;
   try {
     const build = run("docker", ["build", "--platform", "linux/amd64", "--target", "provider-pack-export",
       "--file", dockerfile, "--build-arg", `PAPERCLIP_RUNNER_SOURCE_REVISION=${revision}`,
-      "--output", `type=local,dest=${exported}`, workspaceRoot],
+      "--output", `type=local,dest=${exportRoot}`, workspaceRoot],
     { cwd: workspaceRoot, stdio: "inherit", timeout: 12 * 60 * 1000, killSignal: "SIGTERM" });
     if (build.error || build.status !== 0) throw new Error("Canonical provider-pack build failed");
     const manifest = verifyProviderPack(exported, { revision, lockSha256: expectedLock });

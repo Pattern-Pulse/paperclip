@@ -19,7 +19,12 @@ function fixture(runTest) {
   writeFileSync(join(workspaceRoot, "pnpm-lock.yaml"), "different CI resolution");
   const calls = [];
   function exported(args, tamper) {
-    const destination = args[args.indexOf("--output") + 1].slice("type=local,dest=".length);
+    const exportRoot = args[args.indexOf("--output") + 1].slice("type=local,dest=".length);
+    // BuildKit's local exporter owns the outer directory and creates it 0700.
+    // The nested pack must retain the mode bound in its integrity manifest.
+    mkdirSync(exportRoot, { recursive: true, mode: 0o700 });
+    chmodSync(exportRoot, 0o700);
+    const destination = join(exportRoot, "provider-pack");
     const paths = {
       nodeCommand: "node_modules/node/bin/node", productionLock: "pnpm-lock.yaml",
       opencodeCommand: "node_modules/.bin/opencode", opencodeExecutable: "node_modules/opencode-ai/bin/opencode.exe",
@@ -125,6 +130,7 @@ for (const [name, tamper] of [
   ["extra dependency", root => writeFileSync(join(root, "node_modules/unexpected"), "extra")],
   ["lost executable mode", root => chmodSync(join(root, "node_modules/pi/vendor/pi"), 0o644)],
   ["directory mode", root => chmodSync(join(root, "node_modules/pi/vendor"), 0o700)],
+  ["pack root mode", root => chmodSync(root, 0o700)],
   ["changed internal symlink", root => { unlinkSync(join(root, "node_modules/pi-link")); symlinkSync(".bin/pi", join(root, "node_modules/pi-link")); }],
   ["escaping symlink", root => { unlinkSync(join(root, "node_modules/pi-link")); symlinkSync("../../", join(root, "node_modules/pi-link")); }],
   ["absolute symlink", root => { unlinkSync(join(root, "node_modules/pi-link")); symlinkSync(join(root, "node_modules/pi/vendor/pi"), join(root, "node_modules/pi-link")); }],
