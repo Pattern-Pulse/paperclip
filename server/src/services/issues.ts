@@ -5638,7 +5638,7 @@ export function issueService(db: Db) {
     return row;
   }
 
-  return {
+  const service = {
     clearExecutionRunIfTerminal,
     clearCheckoutRunIfTerminal,
     addStopRelayCommentIfNeeded,
@@ -9535,4 +9535,38 @@ export function issueService(db: Db) {
       }));
     },
   };
+
+  type IssueServiceApi = typeof service & {
+    updateForCompany: (
+      id: string,
+      companyId: string,
+      data: Parameters<typeof service.update>[1],
+      dbOrTx?: any,
+      postCommitActivityPublications?: ActivityPublication[],
+      postCommitActions?: IssuePostCommitAction[],
+    ) => ReturnType<typeof service.update>;
+  };
+  const serviceApi = service as IssueServiceApi;
+
+  // A company-scoped wrapper around `update`. It checks the issue's company
+  // before it writes, so a caller with only a company id and an issue id
+  // can update the issue without naming the wrong company by mistake.
+  serviceApi.updateForCompany = async (
+    id,
+    companyId,
+    data,
+    dbOrTx = db,
+    postCommitActivityPublications,
+    postCommitActions,
+  ) => {
+    const existing = await dbOrTx
+      .select({ companyId: issues.companyId })
+      .from(issues)
+      .where(eq(issues.id, id))
+      .then((rows: Array<{ companyId: string }>) => rows[0] ?? null);
+    if (!existing || existing.companyId !== companyId) return null;
+    return service.update(id, data, dbOrTx, postCommitActivityPublications, postCommitActions);
+  };
+
+  return serviceApi;
 }
