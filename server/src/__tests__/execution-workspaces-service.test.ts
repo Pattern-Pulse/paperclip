@@ -1821,6 +1821,19 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     const openDescendant = await seedTerminalWorkspace({ mergedPr: true, childStatus: "todo" });
     const undelivered = await seedTerminalWorkspace();
 
+    // Test delivery eligibility independently of the sweep's clock boundary.
+    // Postgres timestamps retain sub-millisecond precision, so a just-inserted
+    // row can fall after the JavaScript boundary within the same millisecond.
+    await db
+      .update(executionWorkspaces)
+      .set({ updatedAt: new Date("2020-01-01T00:00:00Z") })
+      .where(inArray(executionWorkspaces.id, [
+        eligible.executionWorkspaceId,
+        activeRun.executionWorkspaceId,
+        openDescendant.executionWorkspaceId,
+        undelivered.executionWorkspaceId,
+      ]));
+
     const result = await svc.sweepTerminalWorkspaces();
     const rows = await db
       .select({ id: executionWorkspaces.id, status: executionWorkspaces.status, cleanupEligibleAt: executionWorkspaces.cleanupEligibleAt, cleanupReason: executionWorkspaces.cleanupReason })
@@ -1833,7 +1846,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
       ]));
     const byId = new Map(rows.map((row) => [row.id, row]));
 
-    expect(result).toMatchObject({ archived: 1, skippedActiveRun: 1, skippedNonTerminalTree: 1, skippedUndelivered: 1 });
+    expect(result).toMatchObject({ checked: 4, archived: 1, skippedActiveRun: 1, skippedNonTerminalTree: 1, skippedUndelivered: 1 });
     expect(byId.get(eligible.executionWorkspaceId)).toMatchObject({ status: "archived", cleanupReason: "issue_terminal" });
     expect(byId.get(eligible.executionWorkspaceId)?.cleanupEligibleAt).toBeInstanceOf(Date);
     expect(byId.get(activeRun.executionWorkspaceId)?.status).toBe("active");
