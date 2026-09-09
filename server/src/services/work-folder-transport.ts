@@ -15,6 +15,9 @@ let source: Promise<string> | undefined;
 // Requests are base64 encoded twice (file bytes, then JSON). Stay below
 // Linux's 128 KiB single-argument limit, including a provider shell wrapper.
 const WRITE_CHUNK_BYTES = 48 * 1024;
+const BATCH_BYTES = 4 * 1024 * 1024;
+const BATCH_OPERATIONS = 256;
+export type WorkFileTransfer = { entry: WorkTreeEntry; body?: Readable };
 
 function transientReadFailure(error: unknown) {
   if (!(error instanceof Error)) return false;
@@ -24,15 +27,19 @@ function transientReadFailure(error: unknown) {
 }
 
 export function workFolderTransport(runner: CommandManagedRuntimeRunner) {
-  async function command(input: Record<string, unknown>): Promise<unknown> {
+  // Native file-sync providers already support bounded stdin uploads. SSH
+  // runners explicitly advertise streaming stdin. Other providers retain the
+  // small-argv transport without assuming additional capabilities.
+  const bulkStdin = Boolean(runner.syncIn && runner.syncOut) || runner.supportsSingleStreamStdinProgress === true;
+  async function command(input: Record<string, unknown>, stdin?: string): Promise<unknown> {
     source ??= readFile(new URL("./scripts/work-folder-io.mjs", import.meta.url), "utf8");
     const args = ["--input-type=module", "-e", await source, Buffer.from(JSON.stringify(input)).toString("base64")];
-    const readOnly = ["home", "scan", "read"].includes(String(input.operation));
+    const readOnly = ["home", "scan", "read", "read-batch"].includes(String(input.operation));
     const deadline = Date.now() + 120_000;
     let result;
     for (let attempt = 0; ; attempt++) {
       try {
-        result = await runner.execute({ command: "node", args, bypassSession: true,
+        result = await runner.execute({ command: "node", args, ...(stdin === undefined ? {} : { stdin }), bypassSession: true,
           timeoutMs: Math.max(1, deadline - Date.now()) });
         break;
       } catch (error) {
@@ -57,7 +64,8 @@ export function workFolderTransport(runner: CommandManagedRuntimeRunner) {
     validateWorkFilePath(filePath);
     return Readable.from((async function* () {
       for (let offset = 0; offset < byteSize;) {
-        const result = z.object({ data: z.string().max(350_000) }).parse(await command({ operation: "read", root, path: filePath, offset }));
+        const length = bulkStdin ? 1024 * 1024 : 256 * 1024;
+        const result = z.object({ data: z.string().max(Math.ceil(length / 3) * 4) }).parse(await command({ operation: "read", root, path: filePath, offset, length }));
         const bytes = Buffer.from(result.data, "base64");
         if (bytes.length === 0 || offset + bytes.length > byteSize) throw new Error("Work file changed during transfer");
         offset += bytes.length;
@@ -65,11 +73,30 @@ export function workFolderTransport(runner: CommandManagedRuntimeRunner) {
       }
     })());
   }
-  async function write(root: string, stagingRoot: string, entry: WorkTreeEntry, body: Readable) {
+  async function readBatch(root: string, entries: WorkTreeEntry[]) {
+    if (entries.length > 64) throw new Error("Work folder read batch exceeds entry limit");
+    let bytes = 0;
+    for (const entry of entries) {
+      entrySchema.parse(entry);
+      if (entry.kind !== "file" || entry.linkTarget) throw new Error("Work folder read batch requires regular files");
+      bytes += entry.byteSize;
+    }
+    if (bytes > 1024 * 1024) throw new Error("Work folder read batch exceeds byte limit");
+    if (!entries.length) return [];
+    const result = z.array(z.object({ data: z.string().max(Math.ceil(1024 * 1024 / 3) * 4) })).max(64)
+      .parse(await command({ operation: "read-batch", root, entries: entries.map(({ path, byteSize }) => ({ path, byteSize })) }));
+    if (result.length !== entries.length) throw new Error("Work folder read batch did not complete");
+    return result.map(({ data }, index) => {
+      const buffer = Buffer.from(data, "base64");
+      if (buffer.length !== entries[index]!.byteSize) throw new Error("Work file changed during transfer");
+      return buffer;
+    });
+  }
+  async function writeChunks(root: string, stagingRoot: string, entry: WorkTreeEntry, body: Readable) {
     const stagingPath = randomUUID();
     let offset = 0;
     for await (const value of body) {
-      const chunk = Buffer.from(value);
+      const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
       for (let start = 0; start < chunk.length; start += WRITE_CHUNK_BYTES) {
         const bytes = chunk.subarray(start, start + WRITE_CHUNK_BYTES);
         await command({ operation: "write", root: stagingRoot, path: stagingPath, offset, data: bytes.toString("base64") });
@@ -81,7 +108,66 @@ export function workFolderTransport(runner: CommandManagedRuntimeRunner) {
     await command({ operation: "publish", root, stagingRoot, stagingPath, path: entry.path,
       sha256: entry.sha256, executable: entry.executable });
   }
-  return { home, scan, read, write,
+  async function writeMany(root: string, stagingRoot: string, transfers: AsyncIterable<WorkFileTransfer>,
+    beforePublish?: (entries: WorkTreeEntry[]) => Promise<void>) {
+    let publishedEntries: WorkTreeEntry[] = [];
+    let operations: Array<Record<string, unknown>> = [];
+    let bufferedBytes = 0;
+    async function flush() {
+      if (!operations.length) return;
+      const body = JSON.stringify(operations);
+      if (Buffer.byteLength(body) > 8 * 1024 * 1024) throw new Error("Work folder batch exceeds transfer limit");
+      if (publishedEntries.length) await beforePublish?.(publishedEntries);
+      const result = z.object({ completed: z.number().int() }).parse(await command({ operation: "batch", root, stagingRoot }, body));
+      if (result.completed !== operations.length) throw new Error("Work folder batch did not complete");
+      operations = []; bufferedBytes = 0; publishedEntries = [];
+    }
+    async function append(operation: Record<string, unknown>, bytes = 0, entry?: WorkTreeEntry) {
+      if (bufferedBytes + bytes > BATCH_BYTES || operations.length >= BATCH_OPERATIONS) await flush();
+      operations.push(operation); bufferedBytes += bytes;
+      if (entry) publishedEntries.push({ ...entry });
+    }
+    for await (const { entry, body } of transfers) {
+      try {
+        entrySchema.parse(entry);
+        if (entry.linkTarget) throw new Error("Work folder batch cannot materialize symlinks");
+        if (entry.kind === "directory") {
+          if (body) throw new Error("Directory transfer cannot have a body");
+          if (bulkStdin) await append({ operation: "mkdir", path: entry.path }, 0, entry);
+          else {
+            await beforePublish?.([entry]);
+            await command({ operation: "mkdir", root, path: entry.path });
+          }
+          continue;
+        }
+        if (!body) throw new Error("Work file transfer source is missing");
+        if (!bulkStdin) {
+          await beforePublish?.([entry]);
+          await writeChunks(root, stagingRoot, entry, body);
+          continue;
+        }
+        const stagingPath = randomUUID();
+        let offset = 0;
+        for await (const value of body) {
+          const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+          for (let start = 0; start < chunk.length; start += 256 * 1024) {
+            const bytes = chunk.subarray(start, start + 256 * 1024);
+            if (offset + bytes.length > entry.byteSize) throw new Error("Work file size changed during transfer");
+            await append({ operation: "write", path: stagingPath, offset, data: bytes.toString("base64") }, bytes.length);
+            offset += bytes.length;
+          }
+        }
+        if (offset === 0) await append({ operation: "write", path: stagingPath, offset: 0, data: "" });
+        if (offset !== entry.byteSize) throw new Error("Work file size changed during transfer");
+        await append({ operation: "publish", stagingPath, path: entry.path, sha256: entry.sha256, executable: entry.executable }, 0, entry);
+      } finally { body?.destroy(); }
+    }
+    if (bulkStdin) await flush();
+  }
+  async function write(root: string, stagingRoot: string, entry: WorkTreeEntry, body: Readable) {
+    return writeMany(root, stagingRoot, (async function* () { yield { entry, body }; })());
+  }
+  return { home, scan, read, readBatch: bulkStdin ? readBatch : undefined, write, writeMany,
     moveRoot: async (source: string, root: string) => { await command({ operation: "move-root", source, root }); },
     symlink: async (root: string, stagingRoot: string, entry: WorkTreeEntry) => { await command({ operation: "symlink", root, stagingRoot, stagingPath: randomUUID(), path: entry.path, linkTarget: entry.linkTarget }); },
     mkdirRoot: async (root: string) => { await command({ operation: "mkdir-root", root }); },

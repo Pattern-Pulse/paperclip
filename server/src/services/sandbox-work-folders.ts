@@ -1,3 +1,4 @@
+import { prefetchWorkFiles } from "./work-folder-transfer.js";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { managedAgentFiles } from "./work-folder-agent-import.js";
@@ -134,10 +135,31 @@ export async function prepareSandboxWorkFolders(input: {
     }
     await db.update(workFolders).set({ importedAt: new Date() }).where(eq(workFolders.id, folder.id));
   }
+  async function reconcileIncoming(scope: WorkFolderScope, current: WorkTreeEntry[]) {
+    const targets = baselines[`incoming:${scope}`];
+    const removed = baselines[`incomingRemoved:${scope}`];
+    if (!targets && !removed) return;
+    const before = new Map((baselines[scope] ?? []).map((entry) => [entry.path, entry]));
+    const observed = new Map(current.map((entry) => [entry.path, entry]));
+    // A failed command may have published some imports or removed some files.
+    // Only adopt effects actually observed on disk; different bytes remain
+    // genuine local edits and must still pass through outgoing synchronization.
+    for (const entry of removed ?? []) if (!observed.has(entry.path)) before.delete(entry.path);
+    for (const entry of targets ?? []) {
+      if (signature(observed.get(entry.path)) === signature(entry)) before.set(entry.path, entry);
+    }
+    baselines[scope] = [...before.values()];
+    delete baselines[`incoming:${scope}`];
+    delete baselines[`incomingRemoved:${scope}`];
+    // Persist the reconciled baseline and remove its provenance atomically,
+    // before any outgoing write can be accepted by the shared collection.
+    await saveState("saving");
+  }
   async function outgoing(scope: WorkFolderScope) {
     const folder = folders[scope];
     if (!folder) return;
     const current = await transport.scan(paths[scope]!);
+    await reconcileIncoming(scope, current);
     const before = new Map((baselines[scope] ?? []).map((entry) => [entry.path, entry]));
     const after = new Map(current.map((entry) => [entry.path, entry]));
     async function operation(filePath: string, nextSignature: string, apply: (id: string) => Promise<unknown>, accept: () => void) {
@@ -186,25 +208,48 @@ export async function prepareSandboxWorkFolders(input: {
       cursor = page.nextCursor ?? undefined;
     } while (cursor);
     const desired = new Map(saved.map((entry) => [entry.path, entry]));
-    // Remove stale children before replacing their parent directory with a file.
-    for (const entry of [...current.values()].sort((a, b) => b.path.length - a.path.length)) {
-      if (!desired.has(entry.path) || desired.get(entry.path)!.kind !== entry.kind) {
-        await transport.remove(paths[scope]!, entry.path);
-        current.delete(entry.path);
-      }
+    // Persist all deletion intents before the first removal, including children
+    // that can disappear when a directory is replaced. A lost response must not
+    // turn an imported deletion into a new delete against a newer shared file.
+    const removed = [...current.values()].filter((entry) => !desired.has(entry.path) || desired.get(entry.path)!.kind !== entry.kind)
+      .sort((a, b) => b.path.length - a.path.length);
+    if (removed.length) {
+      baselines[`incomingRemoved:${scope}`] = removed;
+      await saveState("starting");
     }
-    for (const entry of saved.sort((a, b) => a.path.length - b.path.length)) {
-      if (signature(current.get(entry.path)) === signature(entry)) continue;
-      if (entry.kind === "directory") await transport.mkdir(paths[scope]!, entry.path);
-      else {
-        const result = await svc.content(folder, entry.path);
-        // A shared file can change after listing. Validate and baseline the
-        // version opened by content(), whose metadata and stream belong together.
-        Object.assign(entry, { byteSize: result.file.byteSize, sha256: result.file.sha256, executable: result.file.executable });
-        try { await transport.write(paths[scope]!, staging, entry, result.stream); } finally { result.stream.destroy(); }
-      }
+    for (const entry of removed) {
+      await transport.remove(paths[scope]!, entry.path);
+      current.delete(entry.path);
     }
+    const changed = saved.sort((a, b) => a.path.length - b.path.length)
+      .filter((entry) => signature(current.get(entry.path)) !== signature(entry));
+    await transport.writeMany(paths[scope]!, staging, prefetchWorkFiles(changed, async (entry) => {
+      if (entry.kind === "directory") return { entry };
+      const result = await svc.content(folder, entry.path);
+      // A shared file can change after listing. Validate and baseline the
+      // version opened by content(), whose metadata and stream belong together.
+      Object.assign(entry, { byteSize: result.file.byteSize, sha256: result.file.sha256, executable: result.file.executable });
+      return { entry, body: result.stream };
+    }), async (entries) => {
+      const targets = new Map((baselines[`incoming:${scope}`] ?? []).map((entry) => [entry.path, entry]));
+      for (const entry of entries) {
+        targets.set(entry.path, entry);
+        // Publishing nested files can create parents absent from the listing.
+        // Record those directory imports too, so they cannot be mistaken for
+        // agent-created directories after an interrupted batch.
+        let parent = path.posix.dirname(entry.path);
+        while (parent !== ".") {
+          if (!targets.has(parent)) targets.set(parent, { path: parent, kind: "directory", byteSize: 0, sha256: null, executable: false });
+          parent = path.posix.dirname(parent);
+        }
+      }
+      baselines[`incoming:${scope}`] = [...targets.values()];
+      await saveState("starting");
+    });
     baselines[scope] = saved;
+    delete baselines[`incoming:${scope}`];
+    delete baselines[`incomingRemoved:${scope}`];
+    await saveState("starting");
   }
 
   const bindings: Array<{ binding: typeof taskRepositoryBindings.$inferSelect; root: string }> = [];
@@ -340,10 +385,15 @@ export async function prepareSandboxWorkFolders(input: {
         .where(eq(workFolderRuns.runId, input.runId));
       if (run?.refreshRequested) {
         // The successful final flush protects edits before incoming refresh.
-        await assertBindings();
-        for (const scope of WORK_FOLDER_SCOPES) await incoming(scope);
-        await db.update(workFolderRuns).set({ refreshRequested: false, baselines, updatedAt: new Date() })
-          .where(eq(workFolderRuns.runId, input.runId));
+        try {
+          await assertBindings();
+          for (const scope of WORK_FOLDER_SCOPES) await incoming(scope);
+          await db.update(workFolderRuns).set({ refreshRequested: false, baselines, updatedAt: new Date() })
+            .where(eq(workFolderRuns.runId, input.runId));
+        } catch (error) {
+          await saveState("failed", "Work folder refresh failed; existing files were retained");
+          throw error;
+        }
       }
       // Publish resume identity after data is durable, before releasing a turn.
       await beforeCompletion?.();

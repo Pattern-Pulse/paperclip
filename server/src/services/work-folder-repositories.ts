@@ -1,3 +1,5 @@
+import { createWorkFolderReadCache } from "./work-folder-read-cache.js";
+import { prefetchWorkFiles } from "./work-folder-transfer.js";
 import { createHash, randomUUID } from "node:crypto";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { taskRepositoryBindings, workFolderObjects, type Db } from "@paperclipai/db";
@@ -35,17 +37,47 @@ export function workFolderRepositoryService(db: Db, storage: StorageProvider, tr
     const prefix = `${binding.companyId}/task-repositories/${binding.id}/`;
     if (!knownByBinding.has(binding.id) && binding.checkpointKey) await loadManifest(binding);
     const known = knownByBinding.get(binding.id) ?? new Set<string>();
-    const files: Array<WorkTreeEntry & { objectKey: string | null }> = [];
-    for (const entry of entries) {
-      const objectKey = entry.kind === "file" && !entry.linkTarget ? `${prefix}blobs/${entry.sha256}` : null;
-      if (objectKey && !known.has(objectKey)) await registerWorkFolderObject(db, storage, { objectKey, companyId: binding.companyId, repositoryBindingId: binding.id });
-      if (objectKey && !known.has(objectKey) && !(await storage.headObject({ objectKey })).exists) {
-        await uploadWorkFolderObject(storage, { objectKey, contentType: "application/octet-stream",
-          contentLength: entry.byteSize, sha256: entry.sha256!,
-          createSource: () => transport.read(root, entry.path, entry.byteSize) });
+    // Keep manifest order independent of transfer completion, and send each
+    // content-addressed blob only once even when multiple paths share bytes.
+    const files = entries.map((entry) => ({ ...entry,
+      objectKey: entry.kind === "file" && !entry.linkTarget ? `${prefix}blobs/${entry.sha256}` : null,
+    }));
+    const unknown = new Map<string, WorkTreeEntry>();
+    for (const entry of files) {
+      if (entry.objectKey && !known.has(entry.objectKey) && !unknown.has(entry.objectKey)) {
+        unknown.set(entry.objectKey, entry);
       }
-      files.push({ ...entry, objectKey });
     }
+    const objects = [...unknown];
+    const readCache = transport.readBatch ? createWorkFolderReadCache([...unknown.values()],
+      (entries) => transport.readBatch!(root, entries),
+      (entry) => transport.read(root, entry.path, entry.byteSize)) : undefined;
+    let next = 0;
+    let failure: { error: unknown } | undefined;
+    try {
+      await Promise.all(Array.from({ length: Math.min(4, objects.length) }, async () => {
+        while (!failure) {
+          const object = objects[next++];
+          if (!object) return;
+          const [objectKey, entry] = object;
+          try {
+            await registerWorkFolderObject(db, storage, { objectKey, companyId: binding.companyId, repositoryBindingId: binding.id });
+            if (failure) return;
+            const { exists } = await storage.headObject({ objectKey });
+            if (!exists && !failure) {
+              await uploadWorkFolderObject(storage, { objectKey, contentType: "application/octet-stream",
+                contentLength: entry.byteSize, sha256: entry.sha256!,
+                createSource: () => readCache ? readCache.read(entry) : transport.read(root, entry.path, entry.byteSize) });
+            }
+          } catch (error) {
+            // Stop scheduling after the first error, but drain the other workers
+            // before returning. Their streaming PUTs must not outlive this save.
+            failure ??= { error };
+          }
+        }
+      }));
+    } finally { readCache?.clear(); }
+    if (failure) throw failure.error;
     // Never publish a torn Git index/worktree snapshot as a completed save.
     if (signature(await transport.scan(root, true)) !== digest) throw new Error("Repository changed during checkpoint; retry required");
     const checkpointKey = `${prefix}checkpoints/${randomUUID()}.json`;
@@ -109,14 +141,17 @@ export function workFolderRepositoryService(db: Db, storage: StorageProvider, tr
     if (!binding.checkpointKey) return false;
     const manifest = await loadManifest(binding);
     await transport.mkdirRoot(root);
-    for (const entry of manifest.files) {
-      if (entry.kind === "directory") await transport.mkdir(root, entry.path);
-      else if (entry.linkTarget) await transport.symlink(root, stagingRoot, entry);
-      else {
+    await transport.writeMany(root, stagingRoot, prefetchWorkFiles(
+      manifest.files.filter((entry) => !entry.linkTarget), async (entry) => {
+        if (entry.kind === "directory") return { entry };
         if (!entry.objectKey) throw new Error("Repository checkpoint file is missing");
         const result = await storage.getObject({ objectKey: entry.objectKey });
-        try { await transport.write(root, stagingRoot, entry, result.stream); } finally { result.stream.destroy(); }
-      }
+        return { entry, body: result.stream };
+      }));
+    // Restore links only after ordinary files. No transfer follows a link as
+    // a parent, and symlink() still confines its target to this repository.
+    for (const entry of manifest.files) {
+      if (entry.linkTarget) await transport.symlink(root, stagingRoot, entry);
     }
     return true;
   }

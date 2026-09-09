@@ -17,6 +17,7 @@ import * as activityLog from "../services/activity-log.js";
 import { workFolderService } from "../services/work-folders.js";
 import * as workFolderServices from "../services/work-folders.js";
 import { collectWorkFolderGarbage } from "../services/work-folder-garbage.js";
+import type { CommandManagedRuntimeRunner } from "@paperclipai/adapter-utils/command-managed-runtime";
 import { localTestWorkFolderRunner } from "./helpers/work-folder-runner.js";
 const exec = promisify(execFile);
 
@@ -146,7 +147,7 @@ describe("shared sandbox work-folder lifecycle", () => {
     await expect(bindWarmSandboxWorkspace(db, input)).rejects.toThrow("active task run");
   });
   async function prepare(home: string, leaseId: string, physicalId = leaseId, responsibleUserId: string | null = null,
-    options: { taskId?: string; branchName?: string; agentId?: string } = {}) {
+    options: { taskId?: string; branchName?: string; agentId?: string; bulkStdin?: boolean } = {}) {
     await fs.mkdir(home, { recursive: true });
     const runId = randomUUID();
     const boundAgentId = options.agentId ?? agentId;
@@ -157,7 +158,7 @@ describe("shared sandbox work-folder lifecycle", () => {
     const run = await prepareSandboxWorkFolders({ db, companyId, agentId: boundAgentId, projectId, taskId: options.taskId ?? taskId, runId,
       primaryWorkspaceId: primary!.id, primaryBranchName: options.branchName,
       responsibleUserId, storage, sandboxKey: workFolderSandboxKey(lease), target: { kind: "remote", transport: "sandbox", leaseId, remoteCwd: home,
-        runner: { execute: (input) => localTestWorkFolderRunner.execute({ ...input, env: { ...input.env, HOME: home } }) } } });
+        runner: { supportsSingleStreamStdinProgress: options.bulkStdin, execute: (input) => localTestWorkFolderRunner.execute({ ...input, env: { ...input.env, HOME: home } }) } } });
     active.push(run); return run;
   }
   it("uses downloaded metadata when a shared file changes after the startup listing", async () => {
@@ -248,11 +249,11 @@ describe("shared sandbox work-folder lifecycle", () => {
     active.splice(active.indexOf(run), 1);
   }, 120_000);
 
-  it("reuses clones and restores saved unpushed work, staged changes, and task files after losing the sandbox", async () => {
+  it.each([false, true])("reuses clones and restores saved unpushed work, staged changes, and task files after losing the sandbox (bulk stdin: %s)", async (bulkStdin) => {
     const repositoryTaskId = randomUUID();
     await db.insert(issues).values({ id: repositoryTaskId, companyId, projectId, title: "Repository recovery", assigneeAgentId: agentId });
-    const task = { taskId: repositoryTaskId };
-    const home = path.join(root, "sandbox");
+    const task = { taskId: repositoryTaskId, bulkStdin };
+    const home = path.join(root, `sandbox-${bulkStdin}`);
     const leaseId = randomUUID();
     const first = await prepare(home, leaseId, leaseId, null, task);
     expect(first.home).toBe(home);
@@ -278,7 +279,7 @@ describe("shared sandbox work-folder lifecycle", () => {
     await warm.stop(); active.splice(active.indexOf(warm), 1);
     await fs.rm(home, { recursive: true });
     const replacementId = randomUUID();
-    const restored = await prepare(path.join(root, "replacement"), replacementId, replacementId, null, task);
+    const restored = await prepare(path.join(root, `replacement-${bulkStdin}`), replacementId, replacementId, null, task);
     expect(await fs.readFile(path.join(restored.primaryRepo, ".setup-count"), "utf8")).toBe("initialized\ninitialized\n");
     expect(await fs.readFile(path.join(restored.primaryRepo, "node_modules/acceptance/installed"), "utf8")).toBe("ready");
     await expect(fs.stat(path.join(restored.primaryRepo, "node_modules/acceptance/warm-cache"))).rejects.toMatchObject({ code: "ENOENT" });
@@ -290,6 +291,120 @@ describe("shared sandbox work-folder lifecycle", () => {
     expect(await fs.readlink(path.join(restored.primaryRepo, "link"))).toBe("tracked");
     await restored.stop(); active.splice(active.indexOf(restored), 1);
   }, 120_000);
+  it.each([
+    { bulk: true, refresh: false, edit: false, apply: true },
+    { bulk: true, refresh: false, edit: false, apply: false },
+    { bulk: false, refresh: false, edit: false, apply: true },
+    { bulk: true, refresh: false, edit: true, apply: true },
+    { bulk: true, refresh: true, edit: false, apply: true },
+  ])("reconciles imported files after a lost response (bulk=$bulk refresh=$refresh edit=$edit apply=$apply)", async ({ bulk, refresh, edit, apply }) => {
+    const scopedAgent = randomUUID(), sandboxKey = randomUUID();
+    await db.insert(agents).values({ id: scopedAgent, companyId, name: "Inbound recovery" });
+    const svc = workFolderService(db, storage);
+    const folder = await svc.ensure({ companyId, scope: "agent", ownerId: scopedAgent });
+    const home = path.join(root, `incoming-${sandboxKey}`);
+    await fs.mkdir(home);
+    let loseResponse = false;
+    let failedRunId = "";
+    const runner: CommandManagedRuntimeRunner = {
+      supportsSingleStreamStdinProgress: bulk,
+      execute: async (input) => {
+        const request = input.command === "node" ? JSON.parse(Buffer.from(input.args!.at(-1)!, "base64").toString()) : {};
+        const fail = loseResponse && request.root === path.join(home, "agent")
+          && (request.operation === "publish" || request.operation === "batch");
+        if (fail && !apply) { loseResponse = false; throw new Error("Injected lost incoming response"); }
+        const result = await localTestWorkFolderRunner.execute({ ...input, env: { ...input.env, HOME: home } });
+        if (fail) {
+          expect(result.exitCode).toBe(0);
+          loseResponse = false;
+          throw new Error("Injected lost incoming response");
+        }
+        return result;
+      },
+    };
+    async function start() {
+      const runId = randomUUID(); failedRunId = runId;
+      await db.insert(heartbeatRuns).values({ id: runId, companyId, agentId: scopedAgent, status: "running" });
+      const run = await prepareSandboxWorkFolders({ db, companyId, agentId: scopedAgent, responsibleUserId: null,
+        projectId: null, taskId: null, runId, storage, sandboxKey,
+        target: { kind: "remote", transport: "sandbox", leaseId: randomUUID(), remoteCwd: home, runner } });
+      active.push(run); return run;
+    }
+    await svc.write(folder, { path: "nested/shared.txt", body: Buffer.from("v0"), operationId: randomUUID() });
+    const first = await start();
+    if (!refresh) { await first.stop(); active.splice(active.indexOf(first), 1); }
+    await svc.write(folder, { path: "nested/shared.txt", body: Buffer.from("v1-imported"), executable: true, operationId: randomUUID() });
+    loseResponse = true;
+    if (refresh) {
+      await db.update(workFolderRuns).set({ refreshRequested: true }).where(eq(workFolderRuns.runId, first.manifest.runId));
+      await expect(first.stop()).rejects.toThrow("Injected lost incoming response");
+      active.splice(active.indexOf(first), 1);
+    } else {
+      await expect(start()).rejects.toThrow("Injected lost incoming response");
+    }
+    expect(await fs.readFile(path.join(home, "agent/nested/shared.txt"), "utf8")).toBe(apply ? "v1-imported" : "v0");
+    const [failed] = await db.select().from(workFolderRuns).where(eq(workFolderRuns.runId, failedRunId));
+    expect(failed?.state).toBe("failed");
+    expect(failed?.baselines["incoming:agent"]).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "nested/shared.txt", executable: true }),
+      expect.objectContaining({ path: "nested", kind: "directory" }),
+    ]));
+    await svc.write(folder, { path: "nested/shared.txt", body: Buffer.from("v2-newer-shared"), operationId: randomUUID() });
+    if (edit) await fs.writeFile(path.join(home, "agent/nested/shared.txt"), "v3-actual-local-edit");
+    const retry = await start();
+    const expected = edit ? "v3-actual-local-edit" : "v2-newer-shared";
+    expect(await fs.readFile(path.join(home, "agent/nested/shared.txt"), "utf8")).toBe(expected);
+    const content = await svc.content(folder, "nested/shared.txt");
+    expect(await content.stream.toArray().then((chunks) => Buffer.concat(chunks).toString())).toBe(expected);
+    const [recovered] = await db.select().from(workFolderRuns).where(eq(workFolderRuns.runId, retry.manifest.runId));
+    expect(recovered?.baselines["incoming:agent"]).toBeUndefined();
+    expect(recovered?.baselines["incomingRemoved:agent"]).toBeUndefined();
+    await retry.stop(); active.splice(active.indexOf(retry), 1);
+  }, 60_000);
+
+  it("does not repeat an imported deletion against a newer shared file after a lost remove response", async () => {
+    const scopedAgent = randomUUID(), sandboxKey = randomUUID();
+    await db.insert(agents).values({ id: scopedAgent, companyId, name: "Deletion recovery" });
+    const svc = workFolderService(db, storage);
+    const folder = await svc.ensure({ companyId, scope: "agent", ownerId: scopedAgent });
+    const home = path.join(root, `incoming-delete-${sandboxKey}`);
+    await fs.mkdir(home);
+    let loseResponse = false, failedRunId = "";
+    const runner: CommandManagedRuntimeRunner = {
+      supportsSingleStreamStdinProgress: true,
+      execute: async (input) => {
+        const result = await localTestWorkFolderRunner.execute({ ...input, env: { ...input.env, HOME: home } });
+        const request = input.command === "node" ? JSON.parse(Buffer.from(input.args!.at(-1)!, "base64").toString()) : {};
+        if (loseResponse && request.root === path.join(home, "agent") && request.operation === "remove") {
+          expect(result.exitCode).toBe(0); loseResponse = false;
+          throw new Error("Injected lost removal response");
+        }
+        return result;
+      },
+    };
+    async function start() {
+      const runId = randomUUID(); failedRunId = runId;
+      await db.insert(heartbeatRuns).values({ id: runId, companyId, agentId: scopedAgent, status: "running" });
+      const run = await prepareSandboxWorkFolders({ db, companyId, agentId: scopedAgent, responsibleUserId: null,
+        projectId: null, taskId: null, runId, storage, sandboxKey,
+        target: { kind: "remote", transport: "sandbox", leaseId: randomUUID(), remoteCwd: home, runner } });
+      active.push(run); return run;
+    }
+    await svc.write(folder, { path: "nested/shared.txt", body: Buffer.from("old"), operationId: randomUUID() });
+    const first = await start(); await first.stop(); active.splice(active.indexOf(first), 1);
+    await svc.remove(folder, "nested", randomUUID());
+    loseResponse = true;
+    await expect(start()).rejects.toThrow("Injected lost removal response");
+    await expect(fs.stat(path.join(home, "agent/nested/shared.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    const [failed] = await db.select().from(workFolderRuns).where(eq(workFolderRuns.runId, failedRunId));
+    expect(failed?.baselines["incomingRemoved:agent"].map((entry) => entry.path)).toEqual(["nested/shared.txt", "nested"]);
+    await svc.write(folder, { path: "nested/shared.txt", body: Buffer.from("new shared after deletion"), operationId: randomUUID() });
+    const retry = await start();
+    expect(await fs.readFile(path.join(home, "agent/nested/shared.txt"), "utf8")).toBe("new shared after deletion");
+    const content = await svc.content(folder, "nested/shared.txt");
+    expect(await content.stream.toArray().then((chunks) => Buffer.concat(chunks).toString())).toBe("new shared after deletion");
+    await retry.stop(); active.splice(active.indexOf(retry), 1);
+  }, 60_000);
   it("does not let an unchanged stale shared file overwrite a newer durable value", async () => {
     const svc = workFolderService(db, storage);
     const folder = await svc.ensure({ companyId, scope: "project", ownerId: projectId });
@@ -348,9 +463,12 @@ describe("shared sandbox work-folder lifecycle", () => {
     expect((await svc.list(folder)).files.map((file) => file.path)).toContain("private");
   }, 120_000);
 
-  it("reopens repository blobs after transient PUT failures and retains the previous checkpoint when retries exhaust", async () => {
+  it.each([false, true])("reopens repository blobs after transient PUT failures and retains the previous checkpoint when retries exhaust (bulk stdin: %s)", async (bulkStdin) => {
     const leaseId = randomUUID();
-    const run = await prepare(path.join(root, "replayed-repository-upload"), leaseId);
+    const repositoryTaskId = randomUUID();
+    await db.insert(issues).values({ id: repositoryTaskId, companyId, projectId, title: "Repository retry", assigneeAgentId: agentId });
+    const run = await prepare(path.join(root, `replayed-repository-upload-${bulkStdin}`), leaseId, leaseId, null,
+      { bulkStdin, taskId: repositoryTaskId });
     await run.flush();
     const filename = path.join(run.primaryRepo, "retry-upload");
     const content = "replay the entire repository file";

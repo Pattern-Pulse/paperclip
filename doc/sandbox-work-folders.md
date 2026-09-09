@@ -209,6 +209,29 @@ transfer uses the downloaded version's size, hash, and executable bit. Its sync
 baseline records those same bytes, so an unchanged copy cannot overwrite a later
 shared edit.
 
+Providers with native file synchronization or explicit streaming-stdin support
+hydrate files through bounded stdin batches instead of one remote command per
+small chunk. A batch carries at most 4 MiB of file bytes and 256 operations;
+each file still uses confined paths, SHA-256 validation, and atomic publication.
+Before publishing an incoming batch or applying incoming deletions, the host
+persists the intended versions in Postgres. After a failed or lost response,
+the next run reconciles those intents against observed disk contents before
+saving outgoing changes. Imported bytes therefore cannot overwrite a newer
+shared version by being mistaken for an agent edit; actual subsequent edits
+still synchronize normally. Failed explicit refreshes retain the same intent.
+Other providers keep the small-argument transport. Incoming storage responses
+are prefetched four at a time and closed if transfer fails. Repository restores
+use the same path, then recreate confined repository links.
+
+Repository checkpoints transfer at most four distinct content-addressed blobs
+concurrently, avoiding duplicate uploads for identical files. Small-file reads
+are grouped into at most 1 MiB and 64 files per remote command, with at most
+four read batches cached per checkpoint. Larger files stream independently.
+Retries bypass that cache and reopen the actual file. All active transfers
+must settle, and a second filesystem scan must match, before the
+complete checkpoint reference can advance. Scoped-file retry receipts and
+last-write-wins publication remain ordered.
+
 Outgoing checkpoints run every **180 seconds**, with at most one in flight,
 and a final flush when execution stops. File signatures include content and
 executable state. Unchanged stale working copies do not overwrite newer shared

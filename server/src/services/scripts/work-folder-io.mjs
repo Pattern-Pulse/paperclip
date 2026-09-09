@@ -6,7 +6,7 @@ import os from "node:os";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 
-const input = JSON.parse(Buffer.from(process.argv[1], "base64").toString("utf8"));
+let input = JSON.parse(Buffer.from(process.argv[1], "base64").toString("utf8"));
 const MAX_CHUNK = 256 * 1024;
 const MAX_ENTRIES = 100_000;
 function safeRelative(value) {
@@ -129,6 +129,8 @@ function scan() {
   return results.sort((a, b) => a.path.localeCompare(b.path));
 }
 
+function execute(request) {
+input = request;
 let result;
 if (input.operation === "home") {
   result = { home: os.homedir() };
@@ -147,7 +149,9 @@ if (input.operation === "home") {
   else if (input.operation === "read") {
     const fd = checked(full(input.path));
     try {
-      const buffer = Buffer.alloc(MAX_CHUNK);
+      const length = input.length ?? MAX_CHUNK;
+      if (!Number.isSafeInteger(length) || length < 1 || length > 1024 * 1024) throw new Error("invalid_read_length");
+      const buffer = Buffer.alloc(length);
       const count = fs.readSync(fd, buffer, 0, buffer.length, input.offset);
       result = { data: buffer.subarray(0, count).toString("base64") };
     } finally { fs.closeSync(fd); }
@@ -200,4 +204,43 @@ if (input.operation === "home") {
     result = {};
   } else throw new Error("unknown_operation");
 }
-process.stdout.write(JSON.stringify(result));
+return result;
+}
+
+const request = input;
+if (request.operation === "read-batch") {
+  if (!Array.isArray(request.entries) || request.entries.length > 64) throw new Error("invalid_read_batch");
+  let bytes = 0;
+  for (const entry of request.entries) {
+    safeRelative(entry.path);
+    if (!Number.isSafeInteger(entry.byteSize) || entry.byteSize < 0) throw new Error("invalid_read_length");
+    bytes += entry.byteSize;
+    if (bytes > 1024 * 1024) throw new Error("read_batch_too_large");
+  }
+  const results = request.entries.map((entry) => execute({ operation: "read", root: request.root,
+    path: entry.path, offset: 0, length: Math.max(1, entry.byteSize) }));
+  process.stdout.write(JSON.stringify(results));
+} else if (request.operation === "batch") {
+  // The provider transports stdin as one bounded upload. The roots stay in the
+  // host-authored argv envelope, so batch contents cannot redirect operations.
+  const chunks = [];
+  let size = 0;
+  const buffer = Buffer.alloc(64 * 1024);
+  let count;
+  while ((count = fs.readSync(0, buffer, 0, buffer.length, null)) > 0) {
+    size += count;
+    if (size > 8 * 1024 * 1024) throw new Error("batch_too_large");
+    chunks.push(Buffer.from(buffer.subarray(0, count)));
+  }
+  const operations = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  if (!Array.isArray(operations) || operations.length > 512) throw new Error("invalid_batch");
+  for (const operation of operations) {
+    if (!operation || !["write", "publish", "mkdir"].includes(operation.operation)) throw new Error("invalid_batch_operation");
+    // Never accept roots, source roots or filesystem commands from the body.
+    execute({ ...operation, root: operation.operation === "write" ? request.stagingRoot : request.root,
+      stagingRoot: request.stagingRoot });
+  }
+  process.stdout.write(JSON.stringify({ completed: operations.length }));
+} else {
+  process.stdout.write(JSON.stringify(execute(request)));
+}
