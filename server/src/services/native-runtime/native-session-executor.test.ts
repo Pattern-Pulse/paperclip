@@ -3521,6 +3521,7 @@ describe("native warm session supervision", () => {
     process.env.PAPERCLIP_RUNNER_STATE_DIR = stateBase;
     process.env.PAPERCLIP_HOME = stateBase;
     const firstClose = vi.fn(async () => undefined);
+    const onEvent = vi.fn(async () => undefined);
     const firstSession = { close: firstClose };
     const first = {
       ...execution,
@@ -3639,6 +3640,7 @@ describe("native warm session supervision", () => {
       } as unknown as Db;
       await executePaperclipNativeSession({
         db: continuationDb,
+        onEvent,
         execution: second,
         runnerEnvironment: useBroker ? { PAPERCLIP_GITHUB_BROKER_TOKEN: "second-run-capability" } : undefined,
         runnerInstanceId: "runner-runnerd-warm",
@@ -3646,9 +3648,28 @@ describe("native warm session supervision", () => {
         runnerExecutionTarget: remoteTarget,
       });
       if (useBroker) {
+        expect(onEvent).toHaveBeenCalledWith({
+          eventType: "native.session.process_rotation",
+          stream: "system",
+          level: "info",
+          message: "Native process rotated for the next run",
+          payload: {
+            reason: "run_scoped_github_capability",
+            previousRunId: first.binding.runId,
+            runId: second.binding.runId,
+            companyId: second.binding.companyId,
+            agentId: second.binding.agentId,
+            nativeSessionId: second.session.normalizedSessionId,
+            runnerInstanceId: "runner-runnerd-warm",
+          },
+        });
+        expect(JSON.stringify(onEvent.mock.calls)).not.toContain("run-capability");
         expect(firstClose).toHaveBeenCalledOnce();
         expect(firstClose).toHaveBeenCalledWith({ reason: "warm native session configuration changed" });
       } else {
+        expect(onEvent).not.toHaveBeenCalledWith(expect.objectContaining({
+          eventType: "native.session.process_rotation",
+        }));
         expect(firstClose).not.toHaveBeenCalled();
         await vi.waitFor(
           () =>

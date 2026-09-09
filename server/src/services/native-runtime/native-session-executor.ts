@@ -4339,6 +4339,22 @@ async function executePaperclipNativeSessionWithinScope(
           input.execution,
           warmConfigDigest,
         );
+        await input.onEvent?.({
+          eventType: "native.session.process_rotation",
+          stream: "system",
+          level: "info",
+          message: "Native process rotated for the next run",
+          payload: {
+            reason: entry.configDigest === warmConfigDigest && credentialRunChanged
+              ? "run_scoped_github_capability" : "configuration_changed",
+            previousRunId: entry.credentialRunId ?? null,
+            runId: input.execution.binding.runId,
+            companyId: input.execution.binding.companyId,
+            agentId: input.execution.binding.agentId,
+            nativeSessionId: nativeSessionKey(input.execution),
+            runnerInstanceId: input.runnerInstanceId,
+          },
+        });
       } else {
         if (entry.busy) throw new Error("native_session_supervisor_busy");
         entry.busy = true;

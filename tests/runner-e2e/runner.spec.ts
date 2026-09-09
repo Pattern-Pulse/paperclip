@@ -19,7 +19,10 @@ import {
   providerSessionContinuityFailures,
 } from "./run-observations.js";
 import { resolveRunnerE2ESource } from "./source.js";
-import { readWarmWorkspaceFile } from "./warm-workspace.js";
+import {
+  nativeWarmProcessFailures,
+  readWarmWorkspaceFile,
+} from "./warm-workspace.js";
 import {
   isPublicRunnerScreenshotRoute,
   PUBLIC_RUNNER_SCREENSHOT_MARKER,
@@ -143,6 +146,7 @@ interface IssueDocumentRecord {
 }
 interface RunEventRecord {
   seq?: number;
+  stream?: string | null;
   eventType?: string;
   payload?: Record<string, unknown> | null;
   sourceInstanceId?: string | null;
@@ -1980,6 +1984,9 @@ for (const execution of executions) {
           );
         }
         if (execution.profile.generation === "native") {
+          invariantFailures.push(
+            ...nativeWarmProcessFailures(selectedRuns, runEventsByRun),
+          );
           const stableIdentityFields: Array<{
             label: string;
             values: unknown[];
@@ -1999,16 +2006,6 @@ for (const execution of executions) {
             {
               label: "provider session",
               values: selectedRuns.map((candidate) => candidate.sessionIdAfter),
-            },
-            {
-              label: "runner pid",
-              values: selectedRuns.map((candidate) => candidate.processPid),
-            },
-            {
-              label: "runner process fingerprint",
-              values: selectedRuns.map(
-                (candidate) => candidate.processStartedAt,
-              ),
             },
           ];
           for (const { label, values } of stableIdentityFields) {

@@ -5,7 +5,10 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { daytonaWarmContinuityTask } from "./catalog.js";
-import { readWarmWorkspaceFile } from "./warm-workspace.js";
+import {
+  nativeWarmProcessFailures,
+  readWarmWorkspaceFile,
+} from "./warm-workspace.js";
 
 const temporaryDirectories: string[] = [];
 afterEach(async () => {
@@ -289,5 +292,108 @@ describe("warm workspace persistence observation", () => {
     });
     expect(input.api.get).toHaveBeenCalledTimes(1);
     expect(input.api.request.get).not.toHaveBeenCalled();
+  });
+});
+
+function processFixture() {
+  const runs = [0, 1, 2].map((index) => ({
+    id: `run-${index}`,
+    companyId: "company",
+    agentId: "agent",
+    nativeSessionId: "native-session",
+    runnerInstanceId: "runner-instance",
+    processPid: 100 + index,
+    processStartedAt: `2026-09-09T04:0${index}:01Z`,
+    startedAt: `2026-09-09T04:0${index}:00Z`,
+    finishedAt: `2026-09-09T04:0${index}:10Z`,
+  }));
+  const groups = runs.map((run, index) => ({
+    runId: run.id,
+    events:
+      index === 0
+        ? []
+        : [
+            {
+              eventType: "native.session.process_rotation",
+              stream: "system",
+              payload: {
+                reason: "run_scoped_github_capability",
+                previousRunId: runs[index - 1]!.id,
+                runId: run.id,
+                companyId: run.companyId,
+                agentId: run.agentId,
+                nativeSessionId: run.nativeSessionId,
+                runnerInstanceId: run.runnerInstanceId,
+              },
+            },
+          ],
+  }));
+  return { runs, groups };
+}
+
+describe("native warm process continuity", () => {
+  it("requires matching controller events for each run-capability rotation", () => {
+    const { runs, groups } = processFixture();
+    expect(nativeWarmProcessFailures(runs, groups)).toEqual([]);
+  });
+
+  it("retains the same-process requirement without credential rotation", () => {
+    const { runs, groups } = processFixture();
+    for (const run of runs) {
+      run.processPid = runs[0]!.processPid;
+      run.processStartedAt = runs[0]!.processStartedAt;
+    }
+    for (const group of groups) group.events = [];
+    expect(nativeWarmProcessFailures(runs, groups)).toEqual([]);
+    runs[1]!.processPid += 1;
+    expect(nativeWarmProcessFailures(runs, groups)).not.toEqual([]);
+  });
+
+  it.each([
+    "reason",
+    "previousRunId",
+    "runId",
+    "companyId",
+    "agentId",
+    "nativeSessionId",
+    "runnerInstanceId",
+  ] as const)("rejects an unrelated rotation %s", (field) => {
+    const { runs, groups } = processFixture();
+    groups[1]!.events[0]!.payload[field] = "unrelated";
+    expect(nativeWarmProcessFailures(runs, groups)).toHaveLength(1);
+  });
+
+  it.each(["missing", "stdout", "duplicate", "configuration_changed"])(
+    "rejects %s rotation evidence",
+    (kind) => {
+      const { runs, groups } = processFixture();
+      const events = groups[1]!.events;
+      if (kind === "missing") events.pop();
+      if (kind === "stdout") events[0]!.stream = "stdout";
+      if (kind === "duplicate") events.push(events[0]!);
+      if (kind === "configuration_changed") events[0]!.payload.reason = kind;
+      expect(nativeWarmProcessFailures(runs, groups)).toHaveLength(1);
+    },
+  );
+
+  it.each(["invalid", "2026-09-09T04:00:59Z", "2026-09-09T04:01:11Z"])(
+    "rejects a process start outside the new run: %s",
+    (time) => {
+      const { runs, groups } = processFixture();
+      runs[1]!.processStartedAt = time;
+      expect(nativeWarmProcessFailures(runs, groups).length).toBeGreaterThan(0);
+    },
+  );
+
+  it("rejects a claimed rotation that kept the previous process", () => {
+    const { runs, groups } = processFixture();
+    runs[1]!.processPid = runs[0]!.processPid;
+    runs[1]!.processStartedAt = runs[0]!.processStartedAt;
+    expect(nativeWarmProcessFailures(runs, groups)).toHaveLength(1);
+  });
+
+  it("rejects a missing event stream even for stable processes", () => {
+    const { runs } = processFixture();
+    expect(nativeWarmProcessFailures(runs, [])).toHaveLength(3);
   });
 });

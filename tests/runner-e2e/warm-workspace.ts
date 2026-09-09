@@ -98,3 +98,84 @@ export async function readWarmWorkspaceFile(input: {
   );
   return { source: "task-cache", content: await response.text() };
 }
+
+/** Stable warm processes or an explicitly recorded run-capability rotation. */
+export function nativeWarmProcessFailures(
+  runs: readonly {
+    id: string;
+    companyId: string;
+    agentId: string;
+    nativeSessionId?: string | null;
+    runnerInstanceId?: string | null;
+    processPid?: number | null;
+    processStartedAt?: string | null;
+    startedAt?: string | null;
+    finishedAt?: string | null;
+  }[],
+  eventGroups: readonly {
+    runId: string;
+    events: readonly {
+      eventType?: string;
+      stream?: string | null;
+      payload?: Record<string, unknown> | null;
+    }[];
+  }[],
+): string[] {
+  const failures: string[] = [];
+  for (const [index, run] of runs.entries()) {
+    if (
+      !Number.isSafeInteger(run.processPid) ||
+      run.processPid! <= 0 ||
+      !Number.isFinite(Date.parse(run.processStartedAt ?? ""))
+    ) {
+      failures.push(`missing native process identity for warm run ${run.id}`);
+      continue;
+    }
+    const group = eventGroups.find((group) => group.runId === run.id);
+    if (!group) {
+      failures.push(`missing native process events for warm run ${run.id}`);
+      continue;
+    }
+    const rotations = group.events.filter(
+      (event) => event.eventType === "native.session.process_rotation",
+    );
+    const previous = runs[index - 1];
+    const sameProcess =
+      !previous ||
+      (previous.processPid === run.processPid &&
+        previous.processStartedAt === run.processStartedAt);
+    if (sameProcess) {
+      if (rotations.length)
+        failures.push(
+          `unexpected native process rotation for warm run ${run.id}`,
+        );
+      continue;
+    }
+    const event = rotations[0];
+    const payload = event?.payload;
+    const started = Date.parse(run.startedAt ?? "");
+    const finished = Date.parse(run.finishedAt ?? "");
+    const processStarted = Date.parse(run.processStartedAt!);
+    if (
+      rotations.length !== 1 ||
+      event?.stream !== "system" ||
+      payload?.reason !== "run_scoped_github_capability" ||
+      payload.previousRunId !== previous.id ||
+      payload.runId !== run.id ||
+      payload.companyId !== run.companyId ||
+      payload.agentId !== run.agentId ||
+      payload.nativeSessionId !== run.nativeSessionId ||
+      payload.runnerInstanceId !== run.runnerInstanceId ||
+      !Number.isFinite(started) ||
+      !Number.isFinite(finished) ||
+      processStarted < started ||
+      processStarted > finished ||
+      processStarted <= Date.parse(previous.processStartedAt ?? "")
+    ) {
+      failures.push(
+        `native warm process changed without a matching run-scoped credential rotation for ${run.id}`,
+      );
+    }
+  }
+  return failures;
+}
