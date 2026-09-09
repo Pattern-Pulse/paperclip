@@ -334,3 +334,9 @@ the service before testing an app redeployment; the platform default is zero.
 This is a deployment prerequisite, not a fleet-default promotion. When upgrading
 from a release without the idle-session drain, park warm native sessions and
 verify their completed harness checkpoints before stopping the old app.
+
+Native OpenCode binds each validated completion result to the current provider
+process and turn before the controller can interrupt it. This matches the
+semantic-tool response path. A shutdown interruption must preserve that exact
+completed-turn authority so the session can be suspended and checkpointed.
+Invalid results and conflicting identities still fail validation.

@@ -543,6 +543,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let expected_canonical_task_context_file =
         argument(&args, "--expected-canonical-task-context-file");
     let emit_tool_call = args.iter().any(|value| value == "--emit-tool-call");
+    let emit_opencode_result = args.iter().any(|value| value == "--emit-opencode-result");
     let replay_completed_tool_call = args
         .iter()
         .any(|value| value == "--replay-completed-tool-call");
@@ -1091,7 +1092,27 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     "method": "turn/started",
                     "params": {"turn": {"id": provider_turn_id}}
                 }))?;
-                if fail_after_second_turn_start && turn_start_count == 2 {
+                if emit_opencode_result {
+                    send(json!({
+                        "method": "paperclip/runResult",
+                        "params": {
+                            "threadId": state.thread_id,
+                            "turnId": provider_turn_id,
+                            "result": {
+                                "schema": "paperclip.run_result.v1",
+                                "reportedWorkDisposition": "done",
+                                "summary": "Finished before controller interruption.",
+                                "completionClaim": {
+                                    "contractRevision": "revision-1",
+                                    "objectiveSatisfied": true,
+                                    "criteria": [{"criterionId": "criterion-1", "status": "satisfied", "evidenceRefs": []}],
+                                    "remainingWork": []
+                                },
+                                "evidence": [], "verification": [], "attentionRequests": [], "artifacts": []
+                            }
+                        }
+                    }))?;
+                } else if fail_after_second_turn_start && turn_start_count == 2 {
                     return Err("configured failure after second turn start".into());
                 } else if fail_turn_immediately {
                     send(json!({
