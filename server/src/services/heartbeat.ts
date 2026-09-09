@@ -1,6 +1,7 @@
 import { initializeRunIdentity } from "./run-identity.js";
+import { startNativeGitHubCallbackBridge } from "./native-github-bridge.js";
 import { githubBrokerEnvironment } from "@paperclipai/adapter-utils/github-launcher";
-import { cleanupGitHubOperationLaunchers, prepareGitHubOperationLaunchers, startAdapterExecutionTargetPaperclipBridge } from "@paperclipai/adapter-utils/execution-target";
+import { cleanupGitHubOperationLaunchers, prepareGitHubOperationLaunchers } from "@paperclipai/adapter-utils/execution-target";
 import fs from "node:fs/promises";
 import { retainUnsavedWorkFolderLease, workFolderSandboxKey } from "./work-folder-retention.js";
 import { findUnboundLegacyTaskWorkspace, hasLegacySandboxWorkspace } from "./legacy-sandbox-workspace.js";
@@ -21436,14 +21437,12 @@ export function heartbeatService(
             // Native Git/gh uses the same authenticated remote callback
             // transport as managed adapters. A bridge failure must not make
             // GitHub a prerequisite for otherwise unrelated native work.
-            let nativeGitHubBridge: Awaited<ReturnType<typeof startAdapterExecutionTargetPaperclipBridge>> = null;
+            let nativeGitHubBridge: Awaited<ReturnType<typeof startNativeGitHubCallbackBridge>> = null;
             if (executionTarget?.kind === "remote" && adapterEnv.PAPERCLIP_GITHUB_BROKER_TOKEN) {
               try {
-                nativeGitHubBridge = await startAdapterExecutionTargetPaperclipBridge({
+                nativeGitHubBridge = await startNativeGitHubCallbackBridge({
                   runId: run.id,
                   target: executionTarget,
-                  runtimeRootDir: path.posix.join(executionTarget.remoteCwd, ".paperclip-runtime", "github", run.id),
-                  adapterKey: "native-github",
                   hostApiToken: adapterEnv.PAPERCLIP_GITHUB_BROKER_TOKEN,
                   // Forward inside this API process. The public tenant origin
                   // requires a browser session and rejects runtime capabilities.

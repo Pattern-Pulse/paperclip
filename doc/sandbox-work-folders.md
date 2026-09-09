@@ -353,6 +353,16 @@ verification; a fallback within `runner.artifact.prepare` can transfer gigabytes
 independently of task files. Acceptance must prove that a matching image uses
 its installed pack instead of silently relying on that fallback.
 
+Native and legacy Git credential callbacks honor the same experimental duplex
+setting and provider capability gates. When streaming is disabled or unavailable,
+the file bridge remains supported. Credential acquisition allows 35 seconds per
+request so the bridge can return its response within its 30-second window.
+Transient transport failures receive at most three attempts within a 75-second
+overall budget; authorization denials and invalid responses are not retried.
+Only credential acquisition is retried, before starting Git or `gh`; repository
+operations are never replayed. Acceptance must exercise both transport paths
+and record which one was actually selected.
+
 Automated tests do not qualify a deployed runner image. Before merging, use a
 new pinned staging stack with the branch's Cloud image and matching migrator.
 The deployed harness must target that tenant URL without launching a local

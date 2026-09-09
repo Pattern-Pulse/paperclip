@@ -3215,6 +3215,7 @@ describe("sandbox adapter execution targets", () => {
       auth: string | null;
       runId: string | null;
       headers: Record<string, string>;
+      body: string;
     }>;
     close: () => Promise<void>;
   }> {
@@ -3224,8 +3225,11 @@ describe("sandbox adapter execution targets", () => {
       auth: string | null;
       runId: string | null;
       headers: Record<string, string>;
+      body: string;
     }> = [];
-    const server = createServer((req, res) => {
+    const server = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
       const headers: Record<string, string> = {};
       for (const [key, value] of Object.entries(req.headers)) {
         if (typeof value === "string") headers[key] = value;
@@ -3236,6 +3240,7 @@ describe("sandbox adapter execution targets", () => {
         auth: req.headers.authorization ?? null,
         runId: typeof req.headers["x-paperclip-run-id"] === "string" ? req.headers["x-paperclip-run-id"] : null,
         headers,
+        body: Buffer.concat(chunks).toString("utf8"),
       });
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true }));
@@ -3362,6 +3367,27 @@ describe("sandbox adapter execution targets", () => {
         url: "/api/agents/me",
         auth: "Bearer real-run-jwt",
         runId: "run-http2",
+      });
+      // Native Git uses this same channel. Keep its runtime capability header
+      // while the host replaces bridge authentication and binds the run ID.
+      const credentials = await http2TestRequest(sessionRef.current!, {
+        method: "POST",
+        path: "/runtime-tools/github/credentials",
+        headers: {
+          authorization: `Bearer ${bridgeToken}`,
+          "x-paperclip-github-capability": "current-github-capability",
+          "content-type": "application/json",
+        },
+        body: "{}",
+      });
+      expect(credentials.status).toBe(200);
+      expect(api.requests[1]).toMatchObject({
+        method: "POST",
+        url: "/runtime-tools/github/credentials",
+        auth: "Bearer real-run-jwt",
+        runId: "run-http2",
+        headers: { "x-paperclip-github-capability": "current-github-capability" },
+        body: "{}",
       });
     } finally {
       sessionRef.current?.close();
