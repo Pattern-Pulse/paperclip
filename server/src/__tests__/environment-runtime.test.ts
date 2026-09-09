@@ -5855,6 +5855,43 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
     expect(result.value.lease.metadata?.sandboxLeaseAcquisition).toEqual({ outcome: "resumed" });
     expect(workerManager.call).toHaveBeenCalledOnce();
     expect((await environmentService(db).getLeaseById(first.lease.id))?.status).toBe("expired");
+
+    // A second server may arrive while the provider resume RPC is still in
+    // flight. It must see the new database owner before it can touch the disk.
+    await db.update(heartbeatRuns).set({ status: "succeeded" }).where(eq(heartbeatRuns.id, nextRunId));
+    await environmentService(db).releaseLease(result.value.lease.id, "released");
+    const raceIds = [randomUUID(), randomUUID()];
+    await db.insert(heartbeatRuns).values(raceIds.map((id) => ({
+      id, companyId: seeded.companyId, agentId: seeded.agentId, status: "running",
+    })));
+    let finishResume!: () => void;
+    let startedResume!: () => void;
+    const resumeStarted = new Promise<void>((resolve) => { startedResume = resolve; });
+    const resumeGate = new Promise<void>((resolve) => { finishResume = resolve; });
+    vi.mocked(workerManager.call).mockClear();
+    vi.mocked(workerManager.call).mockImplementation(async (_pluginId, method) => {
+      if (method !== "environmentResumeLease") throw new Error(`Unexpected replacement: ${method}`);
+      startedResume();
+      await resumeGate;
+      return { providerLeaseId: first.lease.providerLeaseId, metadata: {
+        provider: "fake-plugin", image: "fake:test", timeoutMs: 1234, reuseLease: true,
+      } };
+    });
+    const winner = acquire(raceIds[0]!, taskId);
+    // If acquisition regresses before the RPC, surface that rejection too.
+    await Promise.race([resumeStarted, winner.then(() => undefined)]);
+    try {
+      const otherServer = environmentRuntimeService(db, { pluginWorkerManager: workerManager });
+      await expect(otherServer.acquireRunLease({
+        companyId: seeded.companyId, environment: seeded.environment, issueId: taskId,
+        agentId: seeded.agentId, heartbeatRunId: raceIds[1]!, adapterType,
+        persistedExecutionWorkspace: { id: seeded.executionWorkspaceId, mode: "shared_workspace" },
+      })).rejects.toThrow("the lease was preserved and no replacement was created");
+      expect(workerManager.call).toHaveBeenCalledOnce();
+    } finally {
+      finishResume();
+      await winner;
+    }
   });
 
   it.each([false, true])("preserves active reusable sandbox leases held by another running run (same task: %s)", async (sameTask) => {

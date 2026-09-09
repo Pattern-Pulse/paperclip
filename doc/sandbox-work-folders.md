@@ -94,8 +94,13 @@ A follow-up task run waits up to 30 seconds for a terminal predecessor to releas
 its reusable sandbox. While that handoff is pending, startup cannot allocate a
 second workspace or resume the sandbox concurrently. An active predecessor or
 an incomplete release reports a retryable resume error and preserves the lease.
+The next run claims the reusable lease in Postgres before resuming the provider;
+competing server processes cannot both resume the same released sandbox.
 This applies to both runner generations and leaves distinct task/user bindings
 isolated.
+The new scoped-shell startup setting is not added to an existing unscoped Codex
+session's protected launch arguments. Its durable provider profile remains
+unchanged during attachment.
 
 Acceptance must resume representative pre-upgrade legacy and native tasks with
 committed, staged, unstaged, and untracked work, verify their original paths and

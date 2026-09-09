@@ -1295,6 +1295,31 @@ function createSandboxEnvironmentDriver(
   );
   const environmentsSvc = environmentService(db);
 
+  async function claimReusableLeaseBeforeResume(
+    lease: EnvironmentLease,
+    input: Parameters<EnvironmentRuntimeDriver["acquireRunLease"]>[0],
+  ): Promise<EnvironmentLease> {
+    if (!input.heartbeatRunId || lease.heartbeatRunId === input.heartbeatRunId) return lease;
+    // Transfer ownership atomically before touching the provider. Two server
+    // processes can observe the same released lease; only the winner of this
+    // conditional update/insert may resume its sandbox. A failed resume leaves
+    // the claimed row with this run for normal retention/recovery cleanup.
+    return environmentsSvc.acquireLease({
+      companyId: input.companyId,
+      environmentId: input.environment.id,
+      executionWorkspaceId: input.executionWorkspaceId,
+      issueId: input.issueId,
+      heartbeatRunId: input.heartbeatRunId,
+      assertCompanyBinding: input.assertCompanyBinding,
+      leasePolicy: lease.leasePolicy,
+      provider: lease.provider,
+      providerLeaseId: lease.providerLeaseId,
+      expiresAt: lease.expiresAt ? new Date(lease.expiresAt) : null,
+      metadata: lease.metadata,
+      replacesReusableLeaseId: lease.id,
+    });
+  }
+
   // A live sandbox whose teardown failed needs a durable `pending_cleanup` row,
   // so a sweep can find and release it. When every synchronous write attempt
   // fails, the database is down but the process still runs. So the driver keeps
@@ -1941,7 +1966,7 @@ function createSandboxEnvironmentDriver(
           ? (reusableExistingLeases.find((lease) => lease.metadata?.workFolderRecoveryRequired === true)?.providerLeaseId
             ?? findReusableSandboxLeaseId({ config: storedConfig, leases: reusableExistingLeases }))
           : null;
-        const reusableLease = reusableProviderLeaseId
+        let reusableLease = reusableProviderLeaseId
           ? reusableExistingLeases.find((lease) => lease.providerLeaseId === reusableProviderLeaseId)
           : null;
 
@@ -1971,6 +1996,8 @@ function createSandboxEnvironmentDriver(
               providerLeaseId: reusableLease.providerLeaseId,
             });
           }
+          reusableLease = await claimReusableLeaseBeforeResume(reusableLease, input);
+          if (!reusableLease.providerLeaseId) throw new Error("Reusable sandbox claim lost its provider identity");
           try {
             const resumeDeadline = Date.now() + 60_000;
             const configuredResumeTimeoutMs =
@@ -2308,10 +2335,11 @@ function createSandboxEnvironmentDriver(
           ? (reusableExistingLeases.find((lease) => lease.metadata?.workFolderRecoveryRequired === true)?.providerLeaseId
             ?? findReusableSandboxLeaseId({ config: parsed.config, leases: reusableExistingLeases }))
         : null;
-      const reusableLease = reusableProviderLeaseId
+      let reusableLease = reusableProviderLeaseId
         ? reusableExistingLeases.find((lease) => lease.providerLeaseId === reusableProviderLeaseId)
         : null;
 
+      if (reusableLease) reusableLease = await claimReusableLeaseBeforeResume(reusableLease, input);
       let providerLease;
       try {
         if (reusableLease && (reusableLease.metadata?.workFolderRecoveryRequired === true || hasLegacySandboxWorkspace(reusableLease))) {

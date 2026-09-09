@@ -172,6 +172,9 @@ describe("Codex security configuration", () => {
   it("uses the outer sandbox for default-mode commands only when the controller authorizes it", () => {
     const source = { PAPERCLIP_RUNNER_EXTERNAL_SANDBOX: "1" };
     const externalArgs = createIsolatedCodexAppServerArgs(source);
+    // Adding this protected flag to pre-work-folder sessions breaks run.attach
+    // even though their provider session and retained workspace are intact.
+    expect(externalArgs).not.toContain("allow_login_shell=false");
     const serializedExternalArgs = externalArgs.join("\n");
     expect(externalArgs).toContain(
       "--dangerously-bypass-approvals-and-sandbox",
