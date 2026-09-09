@@ -4,11 +4,13 @@ import request from "supertest";
 import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  agentRuntimeState,
   agentWakeupRequests,
   agents,
   activityLog,
   companies,
   companyMemberships,
+  companySkills,
   createDb,
   heartbeatRunEvents,
   heartbeatRuns,
@@ -52,17 +54,22 @@ describeEmbeddedPostgres("issue queued-comment routes", () => {
   }, 30_000);
 
   afterEach(async () => {
-    await db.update(issues).set({ executionRunId: null }).catch(() => undefined);
-    await db.update(agentWakeupRequests).set({ runId: null }).catch(() => undefined);
-    await db.delete(activityLog).catch(() => undefined);
-    await db.delete(issueComments).catch(() => undefined);
-    await db.delete(heartbeatRunEvents).catch(() => undefined);
-    await db.delete(heartbeatRuns).catch(() => undefined);
-    await db.delete(agentWakeupRequests).catch(() => undefined);
-    await db.delete(issues).catch(() => undefined);
-    await db.delete(companyMemberships).catch(() => undefined);
-    await db.delete(agents).catch(() => undefined);
-    await db.delete(companies).catch(() => undefined);
+    await db.update(issues).set({ executionRunId: null });
+    await db.update(agentWakeupRequests).set({ runId: null });
+    await db.delete(activityLog);
+    await db.delete(issueComments);
+    await db.delete(heartbeatRunEvents);
+    await db.delete(heartbeatRuns);
+    await db.delete(agentWakeupRequests);
+    await db.delete(issues);
+    await db.delete(companyMemberships);
+    // The discard/claim race can execute its real process fixture. Retire the
+    // resulting runtime state before its owning agent and surface any failed
+    // cleanup here rather than contaminating the next company's fixed prefix.
+    await db.delete(agentRuntimeState);
+    await db.delete(agents);
+    await db.delete(companySkills);
+    await db.delete(companies);
   });
 
   afterAll(async () => {
