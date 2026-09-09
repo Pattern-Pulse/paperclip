@@ -90,6 +90,13 @@ server builds. The uploaded artifact and the controller's runner identity use
 the same file. Replacement is atomic and preserves the previous launcher if
 staging fails; it does not reset the task's working files or provider session.
 
+A follow-up task run waits up to 30 seconds for a terminal predecessor to release
+its reusable sandbox. While that handoff is pending, startup cannot allocate a
+second workspace or resume the sandbox concurrently. An active predecessor or
+an incomplete release reports a retryable resume error and preserves the lease.
+This applies to both runner generations and leaves distinct task/user bindings
+isolated.
+
 Acceptance must resume representative pre-upgrade legacy and native tasks with
 committed, staged, unstaged, and untracked work, verify their original paths and
 usable continuation, and exercise their existing restore mechanism after a

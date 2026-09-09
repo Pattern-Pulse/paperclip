@@ -1776,6 +1776,41 @@ function createSandboxEnvironmentDriver(
         throw new Error(`Expected sandbox environment config for driver "${input.environment.driver}".`);
       }
 
+      // A run becomes terminal before its final save and provider release have
+      // finished. A follow-up must wait for that handoff: filtering the active
+      // lease out below would otherwise create an empty competing workspace.
+      // Different tasks and responsible users still receive isolated sandboxes.
+      if (parsed.config.reuseLease && input.issueId && input.heartbeatRunId && input.agentId && input.executionWorkspaceId) {
+        const handoffDeadline = Date.now() + 30_000;
+        while (true) {
+          const [holder] = await db.select({
+            providerLeaseId: environmentLeases.providerLeaseId,
+            runStatus: heartbeatRuns.status,
+          }).from(environmentLeases).innerJoin(heartbeatRuns, and(
+            eq(heartbeatRuns.id, environmentLeases.heartbeatRunId),
+            eq(heartbeatRuns.companyId, environmentLeases.companyId),
+          )).where(and(
+            eq(environmentLeases.companyId, input.companyId),
+            eq(environmentLeases.environmentId, input.environment.id),
+            eq(environmentLeases.executionWorkspaceId, input.executionWorkspaceId),
+            eq(environmentLeases.issueId, input.issueId),
+            eq(environmentLeases.status, "active"),
+            eq(environmentLeases.leasePolicy, "reuse_by_environment"),
+            eq(heartbeatRuns.agentId, input.agentId),
+            sql`${heartbeatRuns.responsibleUserId} is not distinct from ${responsibleUserId}`,
+            sql`${heartbeatRuns.id} <> ${input.heartbeatRunId}`,
+          )).limit(1);
+          if (!holder) break;
+          if (!["succeeded", "interrupted", "failed", "cancelled", "timed_out"].includes(holder.runStatus) || Date.now() >= handoffDeadline) {
+            throw new ReusableSandboxResumeError({
+              provider: parsed.config.provider,
+              providerLeaseId: holder.providerLeaseId ?? input.executionWorkspaceId,
+            });
+          }
+          await delay(250);
+        }
+      }
+
       // Check if this provider should be handled by a plugin.
       if (!isBuiltinSandboxProvider(parsed.config.provider)) {
         const pluginProvider = await resolveSandboxProviderPlugin({
