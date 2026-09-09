@@ -10,6 +10,7 @@ import { agents, assets, companyMemberships, issueAttachments, companies, create
 import { createLocalDiskStorageProvider } from "../storage/local-disk-provider.js";
 import { prepareSandboxWorkFolders } from "../services/sandbox-work-folders.js";
 import { bindWarmSandboxWorkspace } from "../services/sandbox-workspace-binding.js";
+import { findUnboundLegacyTaskWorkspace } from "../services/legacy-sandbox-workspace.js";
 import { retainUnsavedWorkFolderLease, workFolderSandboxKey } from "../services/work-folder-retention.js";
 import * as activityLog from "../services/activity-log.js";
 import { workFolderService } from "../services/work-folders.js";
@@ -50,6 +51,47 @@ describe("shared sandbox work-folder lifecycle", () => {
   afterAll(async () => {
     for (const run of active) await run.stop().catch(() => {});
     await database?.cleanup(); if (root) await fs.rm(root, { recursive: true, force: true });
+  });
+  it.each(["codex_local", "paperclip_runner"])("recovers an unbound pre-change %s workspace only for its recorded identity", async (adapterType) => {
+    const task = randomUUID(), runId = randomUUID(), workspaceId = randomUUID(), leaseId = randomUUID();
+    await db.insert(heartbeatRuns).values({ id: runId, companyId, agentId, responsibleUserId: "owner",
+      status: "succeeded", contextSnapshot: { issueId: task } });
+    await db.insert(issues).values({ id: task, companyId, projectId, title: "Unbound old task", assigneeAgentId: agentId });
+    await db.insert(executionWorkspaces).values({ id: workspaceId, companyId, projectId, sourceIssueId: task,
+      mode: "shared_workspace", strategyType: "project_primary", name: "Retained old workspace" });
+    const metadata = { driver: "sandbox", agentId, reusableSandboxLease: { version: 1, companyId, agentId,
+      environmentId, executionWorkspaceId: workspaceId, adapterType, provider: "daytona" } };
+    await db.insert(environmentLeases).values({ id: leaseId, companyId, environmentId, issueId: task,
+      executionWorkspaceId: workspaceId, heartbeatRunId: runId, status: "retained", leasePolicy: "reuse_by_environment",
+      provider: "daytona", providerLeaseId: "original-sandbox", metadata });
+    const input = { companyId, issueId: task, projectId, agentId, responsibleUserId: "owner", adapterType,
+      executionWorkspaceId: null, executionWorkspacePreference: null,
+      environment: { id: environmentId, driver: "sandbox" as const, config: { reuseLease: true } } };
+    expect(await findUnboundLegacyTaskWorkspace(db, input)).toBe(workspaceId);
+    for (const bad of [{ companyId: randomUUID() }, { issueId: randomUUID() }, { projectId: randomUUID() },
+      { agentId: randomUUID() }, { responsibleUserId: null }, { responsibleUserId: "another-user" },
+      { adapterType: "other-adapter" }, { executionWorkspaceId: randomUUID() },
+      { executionWorkspacePreference: "create_new" }, { environment: null },
+      { environment: { ...input.environment, id: randomUUID() } },
+      { environment: { ...input.environment, driver: "local" as const } },
+      { environment: { ...input.environment, config: { reuseLease: false } } }]) {
+      expect(await findUnboundLegacyTaskWorkspace(db, { ...input, ...bad })).toBeNull();
+    }
+    await db.update(heartbeatRuns).set({ contextSnapshot: { issueId: randomUUID() } }).where(eq(heartbeatRuns.id, runId));
+    expect(await findUnboundLegacyTaskWorkspace(db, input)).toBeNull();
+    await db.update(heartbeatRuns).set({ contextSnapshot: { issueId: task } }).where(eq(heartbeatRuns.id, runId));
+    await db.update(executionWorkspaces).set({ status: "archived" }).where(eq(executionWorkspaces.id, workspaceId));
+    expect(await findUnboundLegacyTaskWorkspace(db, input)).toBeNull();
+    await db.update(executionWorkspaces).set({ status: "active" }).where(eq(executionWorkspaces.id, workspaceId));
+    await db.update(environmentLeases).set({ metadata: { ...metadata,
+      reusableSandboxLease: { ...metadata.reusableSandboxLease, executionWorkspaceId: randomUUID() } } }).where(eq(environmentLeases.id, leaseId));
+    expect(await findUnboundLegacyTaskWorkspace(db, input)).toBeNull();
+    await db.update(environmentLeases).set({ metadata }).where(eq(environmentLeases.id, leaseId));
+    expect(await findUnboundLegacyTaskWorkspace(db, input)).toBe(workspaceId);
+    await db.insert(workFolderRuns).values({ runId, companyId, manifest: { version: 1, companyId, runId,
+      taskId: task, projectId, agentId, responsibleUserId: "owner", leaseId, sandboxKey: leaseId,
+      home: "/home/daytona", folders: { task: null, agent: null, user: null, project: null }, repositories: [] } });
+    expect(await findUnboundLegacyTaskWorkspace(db, input)).toBeNull();
   });
   it("keeps the host's warm task binding without enabling user-configurable worktrees", async () => {
     const task = randomUUID(), runId = randomUUID(), workspaceId = randomUUID();

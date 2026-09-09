@@ -60,6 +60,13 @@ conflicting identity records, configuration drift, or a failed resume retain the
 old sandbox and report a recovery error instead of destroying its only copy.
 The provider cannot opt a new task into this compatibility mode.
 
+Some older releases retained a sandbox without recording a workspace binding on
+the task. When that binding and any explicit workspace preference are absent,
+startup recovers the retained workspace from the matching task, project, agent,
+responsible user, and sandbox environment. Local execution, explicit workspace
+choices, and tasks that have entered scoped persistence do not use this fallback.
+The normal workspace freshness and provider identity checks still apply.
+
 Acceptance must resume representative pre-upgrade legacy and native tasks with
 committed, staged, unstaged, and untracked work, verify their original paths and
 usable continuation, and exercise their existing restore mechanism after a

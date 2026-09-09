@@ -3,7 +3,7 @@ import { githubBrokerEnvironment } from "@paperclipai/adapter-utils/github-launc
 import { cleanupGitHubOperationLaunchers, prepareGitHubOperationLaunchers, startAdapterExecutionTargetPaperclipBridge } from "@paperclipai/adapter-utils/execution-target";
 import fs from "node:fs/promises";
 import { retainUnsavedWorkFolderLease, workFolderSandboxKey } from "./work-folder-retention.js";
-import { hasLegacySandboxWorkspace } from "./legacy-sandbox-workspace.js";
+import { findUnboundLegacyTaskWorkspace, hasLegacySandboxWorkspace } from "./legacy-sandbox-workspace.js";
 import { prepareSandboxWorkFolders } from "./sandbox-work-folders.js";
 import { bindWarmSandboxWorkspace } from "./sandbox-workspace-binding.js";
 import path from "node:path";
@@ -18646,34 +18646,6 @@ export function heartbeatService(
           : null;
       const persistedNativeExecutionWorkspaceId =
         persistedNativeExecutionInput?.binding.executionWorkspaceId ?? null;
-      const requestedExecutionWorkspaceId =
-        persistedNativeExecutionWorkspaceId ??
-        readNonEmptyString(issueRef?.executionWorkspaceId);
-      const existingExecutionWorkspace = requestedExecutionWorkspaceId
-        ? await executionWorkspacesSvc.getById(requestedExecutionWorkspaceId)
-        : null;
-      const nativeRecoveryExecutionWorkspaceId =
-        resolveNativeRecoveryExecutionWorkspaceBinding({
-          bindingId: persistedNativeExecutionWorkspaceId,
-          persistedWorkspaceFound: existingExecutionWorkspace !== null,
-        });
-      const workspaceReuseRequest =
-        resolveExecutionWorkspaceReuseRequestForIssue({
-          issueExecutionWorkspaceId: requestedExecutionWorkspaceId,
-          issueExecutionWorkspacePreference: nativeRecoveryExecutionWorkspaceId
-            ? "reuse_existing"
-            : (issueRef?.executionWorkspacePreference ?? null),
-          existingExecutionWorkspaceStatus:
-            existingExecutionWorkspace?.status ?? null,
-        });
-      const requestedShouldReuseExisting =
-        workspaceReuseRequest.requestedShouldReuseExisting;
-      const reusableExistingExecutionWorkspace =
-        workspaceReuseRequest.existingExecutionWorkspaceAvailable
-          ? existingExecutionWorkspace
-          : null;
-      const requestedReusableExecutionWorkspaceConfig =
-        reusableExistingExecutionWorkspace?.config ?? null;
       const localEnvironment = await environmentsSvc.ensureLocalEnvironment(
         agent.companyId,
       );
@@ -18786,6 +18758,42 @@ export function heartbeatService(
           : selectedEnvironmentId
             ? await environmentsSvc.getById(selectedEnvironmentId)
             : null;
+      const unboundLegacyWorkspaceId = persistedNativeExecutionWorkspaceId ? null
+        : await findUnboundLegacyTaskWorkspace(db, {
+            companyId: agent.companyId, issueId, projectId: issueRef?.projectId ?? null,
+            agentId: agent.id, responsibleUserId: run.responsibleUserId,
+            adapterType: agent.adapterType, environment: selectedEnvironmentForConfig,
+            executionWorkspaceId: readNonEmptyString(issueRef?.executionWorkspaceId),
+            executionWorkspacePreference: issueRef?.executionWorkspacePreference ?? null,
+          });
+      const requestedExecutionWorkspaceId =
+        persistedNativeExecutionWorkspaceId ??
+        readNonEmptyString(issueRef?.executionWorkspaceId) ?? unboundLegacyWorkspaceId;
+      const existingExecutionWorkspace = requestedExecutionWorkspaceId
+        ? await executionWorkspacesSvc.getById(requestedExecutionWorkspaceId)
+        : null;
+      const nativeRecoveryExecutionWorkspaceId =
+        resolveNativeRecoveryExecutionWorkspaceBinding({
+          bindingId: persistedNativeExecutionWorkspaceId,
+          persistedWorkspaceFound: existingExecutionWorkspace !== null,
+        });
+      const workspaceReuseRequest =
+        resolveExecutionWorkspaceReuseRequestForIssue({
+          issueExecutionWorkspaceId: requestedExecutionWorkspaceId,
+          issueExecutionWorkspacePreference: nativeRecoveryExecutionWorkspaceId || unboundLegacyWorkspaceId
+            ? "reuse_existing"
+            : (issueRef?.executionWorkspacePreference ?? null),
+          existingExecutionWorkspaceStatus:
+            existingExecutionWorkspace?.status ?? null,
+        });
+      const requestedShouldReuseExisting =
+        workspaceReuseRequest.requestedShouldReuseExisting;
+      const reusableExistingExecutionWorkspace =
+        workspaceReuseRequest.existingExecutionWorkspaceAvailable
+          ? existingExecutionWorkspace
+          : null;
+      const requestedReusableExecutionWorkspaceConfig =
+        reusableExistingExecutionWorkspace?.config ?? null;
       const sharedWorkspaceConcurrency = resolveSharedWorkspaceConcurrency({
         projectPolicy: projectExecutionWorkspacePolicy,
         issueSettings: issueExecutionWorkspaceSettings,

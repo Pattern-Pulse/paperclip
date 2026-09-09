@@ -1,6 +1,6 @@
-import { and, eq, isNotNull, isNull, notExists, or, sql } from "drizzle-orm";
-import { environmentLeases, heartbeatRuns, workFolderRuns, type Db } from "@paperclipai/db";
-import type { EnvironmentLease } from "@paperclipai/shared";
+import { and, desc, eq, inArray, isNotNull, isNull, notExists, or, sql } from "drizzle-orm";
+import { environmentLeases, executionWorkspaces, heartbeatRuns, workFolderRuns, type Db } from "@paperclipai/db";
+import type { Environment, EnvironmentLease } from "@paperclipai/shared";
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -10,6 +10,46 @@ function record(value: unknown): Record<string, unknown> | null {
 export function hasLegacySandboxWorkspace(lease: Pick<EnvironmentLease, "metadata">) {
   return lease.metadata?.workFolderLayout === "legacy"
     || record(lease.metadata?.reusableSandboxLease)?.version === 1;
+}
+
+/** Older releases retained sandboxes without binding their workspace to the task. */
+export async function findUnboundLegacyTaskWorkspace(db: Db, input: {
+  companyId: string; issueId: string | null; projectId: string | null;
+  agentId: string; responsibleUserId: string | null; adapterType: string;
+  executionWorkspaceId: string | null; executionWorkspacePreference: string | null;
+  environment: Pick<Environment, "id" | "driver" | "config"> | null;
+}) {
+  if (!input.issueId || !input.projectId || input.executionWorkspaceId || input.executionWorkspacePreference
+    || input.environment?.driver !== "sandbox" || input.environment.config.reuseLease !== true) return null;
+  const [candidate] = await db.select({ lease: environmentLeases }).from(environmentLeases)
+    .innerJoin(heartbeatRuns, and(eq(heartbeatRuns.id, environmentLeases.heartbeatRunId),
+      eq(heartbeatRuns.companyId, environmentLeases.companyId)))
+    .innerJoin(executionWorkspaces, and(eq(executionWorkspaces.id, environmentLeases.executionWorkspaceId),
+      eq(executionWorkspaces.companyId, environmentLeases.companyId)))
+    .where(and(eq(environmentLeases.companyId, input.companyId), eq(environmentLeases.issueId, input.issueId),
+      eq(environmentLeases.environmentId, input.environment.id),
+      eq(environmentLeases.leasePolicy, "reuse_by_environment"),
+      inArray(environmentLeases.status, ["retained", "released"]),
+      isNotNull(environmentLeases.providerLeaseId),
+      sql`${environmentLeases.metadata}->>'driver' = 'sandbox'`,
+      sql`${environmentLeases.metadata}->>'workFolderLayout' is distinct from 'scoped'`,
+      sql`${environmentLeases.metadata}->'reusableSandboxLease'->>'version' = '1'`,
+      eq(heartbeatRuns.agentId, input.agentId),
+      input.responsibleUserId === null ? isNull(heartbeatRuns.responsibleUserId)
+        : eq(heartbeatRuns.responsibleUserId, input.responsibleUserId),
+      eq(executionWorkspaces.projectId, input.projectId), eq(executionWorkspaces.status, "active"),
+      or(isNull(executionWorkspaces.sourceIssueId), eq(executionWorkspaces.sourceIssueId, input.issueId)),
+      notExists(db.select({ id: workFolderRuns.runId }).from(workFolderRuns).where(and(
+        eq(workFolderRuns.companyId, input.companyId), sql`${workFolderRuns.manifest}->>'taskId' = ${input.issueId}`)))))
+    .orderBy(desc(environmentLeases.createdAt), desc(environmentLeases.id)).limit(1);
+  if (!candidate) return null;
+  const lease = await bindLegacySandboxIdentity(db, candidate.lease as EnvironmentLease);
+  const scope = record(lease.metadata?.reusableSandboxLease);
+  if (scope?.version !== 2 || scope.issueId !== input.issueId || scope.responsibleUserId !== input.responsibleUserId
+    || scope.adapterType !== input.adapterType || scope.environmentId !== input.environment.id
+    || scope.executionWorkspaceId !== lease.executionWorkspaceId) return null;
+  // Normal workspace freshness and provider sentinel checks still run before use.
+  return lease.executionWorkspaceId;
 }
 
 /** Keep the old sync/restore contract even after its provider sandbox expires. */
