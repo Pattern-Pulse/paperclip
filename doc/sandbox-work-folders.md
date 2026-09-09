@@ -367,6 +367,14 @@ verification; a fallback within `runner.artifact.prepare` can transfer gigabytes
 independently of task files. Acceptance must prove that a matching image uses
 its installed pack instead of silently relying on that fallback.
 
+Commit an up-to-date workspace lockfile whenever runner dependencies change.
+The app and qualified sandbox must use the same resolved lockfile bytes; matching
+source files alone does not prove matching dependencies. A stale lockfile can
+force independent builds to resolve newer transitive packages and invalidate
+preinstalled-pack reuse. Check the committed lockfile with pnpm 9.15.4 using
+`pnpm install --lockfile-only --ignore-scripts --ignore-pnpmfile --frozen-lockfile`
+and compare the actual app and sandbox production-lock hashes before acceptance.
+
 Native and legacy Git credential callbacks honor the same experimental duplex
 setting and provider capability gates. When streaming is disabled or unavailable,
 the file bridge remains supported. Credential acquisition allows 35 seconds per
