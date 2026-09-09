@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, chmodSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { buildProviderPack } from "./build-provider-pack.mjs";
-import { canonicalJson, sha256File, sha256Tree } from "./provider-pack-integrity.mjs";
+import { canonicalJson, sha256File, sha256Tree, prepareProviderTree, writeProviderTreeSidecar, verifyProviderTree } from "./provider-pack-integrity.mjs";
 const revision = "a".repeat(40);
 function fixture(runTest) {
   const parent = mkdtempSync(join(tmpdir(), "canonical-provider-test-"));
@@ -32,14 +32,21 @@ function fixture(runTest) {
       writeFileSync(file, name === "productionLock" ? lock : name);
       artifacts[name] = { path, sha256: sha256File(file) };
     }
+    for (const name of ["node_modules/@agentclientprotocol/codex-acp/dist/index.js", "node_modules/pi/vendor/pi", "node_modules/.bin/pi"]) {
+      mkdirSync(dirname(join(destination, name)), { recursive: true });
+      writeFileSync(join(destination, name), "additional runtime bytes", { mode: 0o755 });
+    }
+    symlinkSync("pi/vendor/pi", join(destination, "node_modules/pi-link"));
     const distDigest = sha256Tree(join(destination, "dist"));
-    const payload = { target: { platform: "linux", architecture: "x64" },
+    const tree = prepareProviderTree(destination);
+    const payload = { exportTreeDigest: tree.digest, target: { platform: "linux", architecture: "x64" },
       runnerSourceRevision: args.find((value) => value.startsWith("PAPERCLIP_RUNNER_SOURCE_REVISION=")).split("=")[1],
       artifacts, distDigest, bridgeDigest: `sha256:${createHash("sha256").update(artifacts.opencodeProxy.sha256).update("\n")
         .update(artifacts.acpxSidecar.sha256).update("\n").update(distDigest).digest("hex")}` };
     const manifest = { schema: "paperclip-runner/remote-provider-pack/v1", payload,
       digest: `sha256:${createHash("sha256").update(canonicalJson(payload)).digest("hex")}` };
     writeFileSync(join(destination, "provider-pack.json"), JSON.stringify(manifest));
+    writeProviderTreeSidecar(destination, tree);
     tamper?.(destination);
   }
   const run = (command, args, options) => { calls.push({ command, args, options }); exported(args); return { status: 0 }; };
@@ -109,3 +116,71 @@ test("implicit HEAD rejects dirty canonical inputs while explicit trusted revisi
     else process.env.PAPERCLIP_RUNNER_SOURCE_REVISION = previous;
   }
 }));
+
+for (const [name, tamper] of [
+  ["ACP dependency", root => writeFileSync(join(root, "node_modules/@agentclientprotocol/codex-acp/dist/index.js"), "changed")],
+  ["Pi binary", root => writeFileSync(join(root, "node_modules/pi/vendor/pi"), "changed")],
+  ["additional binary shim", root => writeFileSync(join(root, "node_modules/.bin/pi"), "changed")],
+  ["missing dependency", root => rmSync(join(root, "node_modules/@agentclientprotocol/codex-acp/dist/index.js"))],
+  ["extra dependency", root => writeFileSync(join(root, "node_modules/unexpected"), "extra")],
+  ["lost executable mode", root => chmodSync(join(root, "node_modules/pi/vendor/pi"), 0o644)],
+  ["directory mode", root => chmodSync(join(root, "node_modules/pi/vendor"), 0o700)],
+  ["changed internal symlink", root => { unlinkSync(join(root, "node_modules/pi-link")); symlinkSync(".bin/pi", join(root, "node_modules/pi-link")); }],
+  ["escaping symlink", root => { unlinkSync(join(root, "node_modules/pi-link")); symlinkSync("../../", join(root, "node_modules/pi-link")); }],
+  ["absolute symlink", root => { unlinkSync(join(root, "node_modules/pi-link")); symlinkSync(join(root, "node_modules/pi/vendor/pi"), join(root, "node_modules/pi-link")); }],
+  ["missing sidecar", root => rmSync(join(root, "provider-pack-integrity.json"))],
+  ["sidecar mode", root => chmodSync(join(root, "provider-pack-integrity.json"), 0o755)],
+]) test("complete inventory rejects " + name + " and retains prior published pack", () => fixture(f => {
+  mkdirSync(f.outputRoot); writeFileSync(join(f.outputRoot, "old"), "retain");
+  const run = (_command, args) => { f.exported(args, tamper); return { status: 0 }; };
+  assert.throws(() => buildProviderPack({ ...f, revision, run }));
+  assert.equal(readFileSync(join(f.outputRoot, "old"), "utf8"), "retain");
+  assert.deepEqual(readdirSync(f.parent).sort(), ["output", "source"]);
+}));
+test("inventory digest is bound in the manifest and cannot be replaced independently", () => fixture(f => {
+  const run = (_command, args) => { f.exported(args, root => {
+    const p = join(root, "provider-pack-integrity.json"), sidecar = JSON.parse(readFileSync(p, "utf8"));
+    sidecar.entries = sidecar.entries.filter(e => e.path !== "node_modules/pi/vendor/pi");
+    sidecar.digest = "sha256:" + createHash("sha256").update(canonicalJson(sidecar.entries)).digest("hex");
+    writeFileSync(p, JSON.stringify(sidecar));
+  }); return { status: 0 }; };
+  assert.throws(() => buildProviderPack({ ...f, revision, run }), /inventory digest mismatch/);
+}));
+test("sidecar covers final manifest and excludes only its own bytes", () => fixture(f => {
+  buildProviderPack({ ...f, revision });
+  const manifest = JSON.parse(readFileSync(join(f.outputRoot, "provider-pack.json"), "utf8"));
+  const sidecar = JSON.parse(readFileSync(join(f.outputRoot, "provider-pack-integrity.json"), "utf8"));
+  assert(sidecar.entries.some(e => e.path === "provider-pack.json"));
+  assert(!sidecar.entries.some(e => e.path === "provider-pack-integrity.json"));
+  assert(sidecar.entries.some(e => e.path === "node_modules/pi-link" && e.target === "pi/vendor/pi"));
+  assert.doesNotThrow(() => verifyProviderTree(f.outputRoot, manifest.payload.exportTreeDigest));
+  writeFileSync(join(f.outputRoot, "provider-pack.json"), "different manifest");
+  assert.throws(() => verifyProviderTree(f.outputRoot, manifest.payload.exportTreeDigest), /contents/);
+}));
+test("large binary hashing matches byte digest and inventory normalizes existing a+rX contract", () => fixture(f => {
+  const file = join(f.parent, "large"), data = Buffer.alloc(8 * 1024 * 1024 + 31, 0x7d);
+  writeFileSync(file, data);
+  assert.equal(sha256File(file), "sha256:" + createHash("sha256").update(data).digest("hex"));
+  const dir = join(f.parent, "tree");mkdirSync(dir, { mode: 0o700 });writeFileSync(join(dir, "tool"), "tool", { mode: 0o700 });
+  const prepared = prepareProviderTree(dir);
+  assert.equal(prepared.entries.find(e => e.path === "").mode, 0o755);
+  assert.equal(prepared.entries.find(e => e.path === "tool").mode, 0o755);
+}));
+
+test("source-revision-only changes preserve content tree identity", () => fixture(f => {
+  const first = buildProviderPack({ ...f, revision });
+  const second = buildProviderPack({ ...f, revision: "b".repeat(40) });
+  assert.equal(first.manifest.payload.exportTreeDigest, second.manifest.payload.exportTreeDigest);
+  assert.notEqual(first.manifest.digest, second.manifest.digest);
+}));
+test("both canonical stages exercise pinned CLI versions and verify full tree after launch smoke", () => {
+  for (const [file, stageName] of [["../../../Dockerfile", "cloud-provider-pack"], ["../../../docker/daytona-runner/Dockerfile", "provider-pack-build"]]) {
+    const body = readFileSync(new URL(file, import.meta.url), "utf8").split(/^FROM /m).find(s => s.split("\n", 1)[0].endsWith(" AS " + stageName));
+    assert(body);
+    const pi = body.indexOf("verify-pi-provider-launch.mjs /provider-pack"), versions = body.indexOf('test "$(acpx --version)" = "0.13.1"'), verification = body.indexOf("verifyProviderPack('/provider-pack'");
+    assert(pi >= 0 && versions > pi && verification > versions);
+    assert(body.includes('test "$(claude-agent-acp --version)" = "0.70.0"'));
+    assert(body.includes('test "$(codex-acp --version)" = "@agentclientprotocol/codex-acp 1.6.2"'));
+    assert(!body.includes("chmod -R a+rX /provider-pack"), "Modes must be normalized before binding the inventory");
+  }
+});

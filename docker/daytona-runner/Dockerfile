@@ -39,7 +39,8 @@ RUN pnpm --filter @paperclipai/paperclip-runner build:typescript \
     && PAPERCLIP_RUNNER_SOURCE_REVISION="${PAPERCLIP_RUNNER_SOURCE_REVISION}" \
       node packages/paperclip-runner/scripts/assemble-provider-pack.mjs /provider-pack \
     && node packages/paperclip-runner/scripts/verify-pi-provider-launch.mjs /provider-pack \
-    && chmod -R a+rX /provider-pack
+    && PATH=/provider-pack/node_modules/.bin:$PATH sh -ec 'for cli in node acpx claude-agent-acp codex-acp pi-acp pi claude codex opencode; do test -x "/provider-pack/node_modules/.bin/$cli"; done; test "$(acpx --version)" = "0.13.1"; test "$(claude-agent-acp --version)" = "0.70.0"; test "$(codex-acp --version)" = "@agentclientprotocol/codex-acp 1.6.2"' \
+    && node --input-type=module -e "import {verifyProviderPack} from './packages/paperclip-runner/scripts/provider-pack-integrity.mjs'; verifyProviderPack('/provider-pack', {revision: '${PAPERCLIP_RUNNER_SOURCE_REVISION}', lockSha256: '${PAPERCLIP_RUNNER_LOCK_SHA256}'});"
 
 # The trusted qualification entry exports the identical canonical provider stage.
 FROM scratch AS provider-pack-export

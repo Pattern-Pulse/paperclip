@@ -1,4 +1,4 @@
-import { canonicalJson, sha256File, sha256Tree } from "./provider-pack-integrity.mjs";
+import { canonicalJson, sha256File, sha256Tree, prepareProviderTree, writeProviderTreeSidecar } from "./provider-pack-integrity.mjs";
 import { normalizeProviderPackLayout } from "./provider-pack-layout.mjs";
 import { portableProviderShim } from "./portable-provider-shim.mjs";
 import { createHash } from "node:crypto";
@@ -232,7 +232,9 @@ try {
     : spawnSync("git", ["diff", "--quiet", "--", "packages/paperclip-runner"], {
         cwd: workspaceRoot,
       }).status !== 0;
+  const exportTree = prepareProviderTree(temporaryRoot);
   const payload = {
+    exportTreeDigest: exportTree.digest,
     pins: {
       nodeMinimum: minimumNodeVersion.join("."),
       codex: "0.153.4",
@@ -296,6 +298,8 @@ try {
     `${JSON.stringify(manifest, null, 2)}\n`,
     { mode: 0o600 },
   );
+
+  writeProviderTreeSidecar(temporaryRoot, exportTree);
 
   rmSync(outputRoot, { recursive: true, force: true });
   renameSync(temporaryRoot, outputRoot);
