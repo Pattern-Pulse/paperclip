@@ -1,3 +1,4 @@
+import { runWithSandboxPerformanceTrace, type SandboxPerformanceRecord } from "../services/sandbox-performance.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -39,6 +40,29 @@ describe("durable work folders", () => {
     for await (const chunk of stream) buffers.push(Buffer.from(chunk));
     return Buffer.concat(buffers).toString();
   }
+  it("measures metadata, response wait, body bytes and progress without private paths", async () => {
+    const records: SandboxPerformanceRecord[] = [];
+    await runWithSandboxPerformanceTrace({ runId: randomUUID(), enabled: true,
+      onBatch: async (batch) => { records.push(...batch.records); } }, async () => {
+      const f = await folder();
+      await svc.write(f, { path: "private-observed-file", body: Buffer.from("private-observed-content"), operationId: "private-operation-id" });
+      const opened = await svc.content(f, "private-observed-file", 7);
+      let text = ""; for await (const chunk of opened.stream) text += String(chunk);
+      expect(text).toBe("private-observed-content");
+      await svc.list(f);
+    });
+    const names = records.map((record) => record.name);
+    for (const name of ["work_folder.scope.ensure", "work_folder.metadata.get", "work_folder.object.get_response", "work_folder.object.body", "work_folder.spool.consume", "work_folder.metadata.mutate", "work_folder.db.query"]) expect(names).toContain(name);
+    const response = records.find((record) => record.name === "work_folder.object.get_response")!;
+    const body = records.find((record) => record.name === "work_folder.object.body")!;
+    expect(response.attributes.requestCount).toBe(1);
+    expect(body.attributes.bytes).toBe(Buffer.byteLength("private-observed-content"));
+    expect(body.attributes.fileIndex).toBe(7);
+    expect(response.attributes.fileIndex).toBe(7);
+    expect(body.startedAtMs).toBeGreaterThanOrEqual(response.startedAtMs);
+    expect(records.filter((record) => record.name === "work_folder.db.query").every((record) => typeof record.attributes.operation === "string")).toBe(true);
+    for (const secret of [companyId, root, "private-observed-file", "private-observed-content", "private-operation-id"]) expect(JSON.stringify(records)).not.toContain(secret);
+  });
   it("streams nested executable and empty files into durable storage", async () => {
     const f = await folder();
     await svc.write(f, { path: "bin/run", body: Readable.from(["#!/bin/sh\n", "true\n"]), executable: true, operationId: "first" });

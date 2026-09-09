@@ -202,6 +202,9 @@ RUN set -eu; \
 # doc/observability.md).
 #
 # CLOUD_BUNDLED_SERVER_DEPS names the optional peer packages to install.
+# CLOUD_BUNDLED_OTEL_DEPS adds the tracing peers independently because release
+# workflows explicitly override the former with the Sentry package. Installing
+# tracing support does not enable it: an operator must still set an OTLP endpoint.
 # The value is a space-separated list, the same shape as
 # CLOUD_BUNDLED_PLUGINS above. The stage reads each package's version
 # from the `peerDependencies` block of `server/package.json` at build
@@ -238,17 +241,19 @@ RUN set -eu; \
 FROM build AS cloud-server-deps
 WORKDIR /app/.cloud-server-deps
 ARG CLOUD_BUNDLED_SERVER_DEPS="@sentry/node"
+ARG CLOUD_BUNDLED_OTEL_DEPS="@opentelemetry/sdk-node @opentelemetry/auto-instrumentations-node @opentelemetry/resources @opentelemetry/semantic-conventions @opentelemetry/exporter-trace-otlp-grpc @opentelemetry/exporter-trace-otlp-proto @opentelemetry/exporter-trace-otlp-http"
 RUN set -eu; \
   test -n "$CLOUD_BUNDLED_SERVER_DEPS" || { echo "ERROR: CLOUD_BUNDLED_SERVER_DEPS is empty; name at least one optional peer package to install" >&2; exit 1; }; \
   echo '{"name":"paperclip-cloud-server-deps","private":true}' > package.json; \
   specifiers=""; \
-  for name in $CLOUD_BUNDLED_SERVER_DEPS; do \
+  for name in $CLOUD_BUNDLED_SERVER_DEPS $CLOUD_BUNDLED_OTEL_DEPS; do \
     version="$(node -e "const pkg=require('/app/server/package.json'); const name=process.argv[1]; const version=(pkg.peerDependencies||{})[name]; if(!version){console.error('ERROR: server/package.json declares no peerDependencies version for '+JSON.stringify(name));process.exit(1);} const meta=(pkg.peerDependenciesMeta||{})[name]; if(!meta||meta.optional!==true){console.error('ERROR: '+JSON.stringify(name)+' is not declared as an optional peer dependency in server/package.json; CLOUD_BUNDLED_SERVER_DEPS may name only optional peer packages');process.exit(1);} process.stdout.write(version);" "$name")"; \
     test -n "$version" || { echo "ERROR: could not resolve a version for '$name'" >&2; exit 1; }; \
     specifiers="$specifiers ${name}@${version}"; \
   done; \
   test -n "$specifiers" || { echo "ERROR: CLOUD_BUNDLED_SERVER_DEPS names no package" >&2; exit 1; }; \
-  pnpm add --ignore-workspace --no-lockfile $specifiers
+  pnpm add --ignore-workspace --no-lockfile $specifiers \
+  && node -e "const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');const peers=require('/app/server/package.json').peerDependencies;for(const name of process.argv.slice(1)){let dir=path.dirname(require.resolve(name)),found=false;for(let depth=0;depth<12;depth++,dir=path.dirname(dir)){const file=path.join(dir,'package.json');if(!fs.existsSync(file))continue;const pkg=JSON.parse(fs.readFileSync(file,'utf8'));if(pkg.name!==name)continue;assert.equal(pkg.version,peers[name],name+' must match the server optional peer version');found=true;break;}assert(found,'Cannot verify installed optional peer '+name);}" $CLOUD_BUNDLED_SERVER_DEPS $CLOUD_BUNDLED_OTEL_DEPS
 
 # Use the same qualified interpreter as the Daytona provider-pack build.
 # The controller owns this pack and its manifest; remote OpenCode/ACPX launches
@@ -277,7 +282,7 @@ ARG PAPERCLIP_BUILD_COMMIT
 RUN test -n "${PAPERCLIP_BUILD_COMMIT}" \
   && pnpm --filter @paperclipai/paperclip-runner build:typescript \
   && PAPERCLIP_RUNNER_SOURCE_REVISION="${PAPERCLIP_BUILD_COMMIT}" \
-    node packages/paperclip-runner/scripts/build-provider-pack.mjs /provider-pack \
+    node packages/paperclip-runner/scripts/assemble-provider-pack.mjs /provider-pack \
   && node packages/paperclip-runner/scripts/verify-pi-provider-launch.mjs /provider-pack \
   && chmod -R a+rX /provider-pack
 

@@ -6,7 +6,30 @@ import os from "node:os";
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { execFileSync } from "node:child_process";
 
-let input = JSON.parse(Buffer.from(process.argv[1], "base64").toString("utf8"));
+const commandStartedAt = performance.now();
+const remotePhases = [];
+let performanceRequested = true;
+const metrics = { droppedPhases: 0, executionMs: 0, scanMs: 0, listMs: 0, gitListMs: 0, hashMs: 0, readMs: 0, writeMs: 0, publishMs: 0,
+  decodeMs: 0, encodeMs: 0, files: 0, bytes: 0, hashFiles: 0, hashBytes: 0, requestCount: 0 };
+function measured(key, work) {
+  if (!performanceRequested) return work();
+  const startedAt = performance.now();
+  try { return work(); } finally {
+    const durationMs = performance.now() - startedAt;
+    metrics[key] += durationMs;
+    if (remotePhases.length < 256) remotePhases.push({ phase: key, startOffsetMs: startedAt - commandStartedAt, durationMs });
+    else metrics.droppedPhases++;
+  }
+}
+let input = measured("decodeMs", () => JSON.parse(Buffer.from(process.argv[1], "base64").toString("utf8")));
+performanceRequested = input.performance === true;
+function output(result) {
+  const encoded = measured("encodeMs", () => JSON.stringify(result));
+  metrics.executionMs = performance.now() - commandStartedAt;
+  process.stdout.write(performanceRequested
+    ? `{"workFolderPerformanceVersion":1,"result":${encoded},"performance":${JSON.stringify(metrics)},"remotePhases":${JSON.stringify(remotePhases)}}`
+    : encoded);
+}
 const MAX_CHUNK = 256 * 1024;
 const MAX_ENTRIES = 100_000;
 function safeRelative(value) {
@@ -51,18 +74,22 @@ function checked(target, directory = false) {
 }
 function children(target) {
   const fd = checked(target, true);
-  try { return fs.readdirSync(process.platform === "linux" ? `/proc/self/fd/${fd}` : target).sort(); }
+  try { return measured("listMs", () => fs.readdirSync(process.platform === "linux" ? `/proc/self/fd/${fd}` : target).sort()); }
   finally { fs.closeSync(fd); }
 }
 function checksum(target) {
-  const fd = checked(target);
-  try {
-    const hash = createHash("sha256");
-    const buffer = Buffer.alloc(MAX_CHUNK);
-    let count;
-    while ((count = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0) hash.update(buffer.subarray(0, count));
-    return hash.digest("hex");
-  } finally { fs.closeSync(fd); }
+  return measured("hashMs", () => {
+    const fd = checked(target);
+    try {
+      const hash = createHash("sha256");
+      const buffer = Buffer.alloc(MAX_CHUNK);
+      let count;
+      while ((count = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0) {
+        metrics.hashBytes += count; hash.update(buffer.subarray(0, count));
+      }
+      return hash.digest("hex");
+    } finally { fs.closeSync(fd); metrics.hashFiles++; }
+  });
 }
 function ensureDirectory(target) {
   withParent(target, false, (anchored) => {
@@ -110,8 +137,8 @@ function scan() {
     const gitDir = path.join(input.root, ".git");
     const fd = checked(gitDir, true); fs.closeSync(fd);
     if (fs.existsSync(path.join(gitDir, "objects/info/alternates"))) throw new Error("repository_is_not_independent");
-    const files = execFileSync("git", ["-C", input.root, "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-      { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).split("\0").filter(Boolean);
+    const files = measured("gitListMs", () => execFileSync("git", ["-C", input.root, "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+      { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 })).split("\0").filter(Boolean);
     for (const relative of [...new Set(files)].sort()) {
       // Git reports nested repositories with a trailing slash. Private runner
       // caches can contain them and must be excluded before path validation.
@@ -131,6 +158,7 @@ function scan() {
 
 function execute(request) {
 input = request;
+metrics.requestCount++;
 let result;
 if (input.operation === "home") {
   result = { home: os.homedir() };
@@ -145,21 +173,22 @@ if (input.operation === "home") {
   })); result = {};
 } else {
   const rootFd = checked(input.root, true); fs.closeSync(rootFd);
-  if (input.operation === "scan") result = scan();
+  if (input.operation === "scan") result = measured("scanMs", () => scan());
   else if (input.operation === "read") {
     const fd = checked(full(input.path));
     try {
       const length = input.length ?? MAX_CHUNK;
       if (!Number.isSafeInteger(length) || length < 1 || length > 1024 * 1024) throw new Error("invalid_read_length");
       const buffer = Buffer.alloc(length);
-      const count = fs.readSync(fd, buffer, 0, buffer.length, input.offset);
-      result = { data: buffer.subarray(0, count).toString("base64") };
+      const count = measured("readMs", () => fs.readSync(fd, buffer, 0, buffer.length, input.offset));
+      metrics.files++; metrics.bytes += count;
+      result = { data: measured("encodeMs", () => buffer.subarray(0, count).toString("base64")) };
     } finally { fs.closeSync(fd); }
   } else if (input.operation === "mkdir") {
     parents(input.path); ensureDirectory(full(input.path)); result = {};
   } else if (input.operation === "write") {
     parents(input.path);
-    const buffer = Buffer.from(input.data, "base64");
+    const buffer = measured("decodeMs", () => Buffer.from(input.data, "base64"));
     if (buffer.length > MAX_CHUNK) throw new Error("chunk_too_large");
     const target = full(input.path);
     // Temporary writes happen in a separate host-selected staging root.
@@ -170,7 +199,8 @@ if (input.operation === "home") {
         const stat = fs.fstatSync(fd);
         if (!stat.isFile() || stat.nlink !== 1) throw new Error("unsupported_file");
         if (stat.size !== input.offset) throw new Error("invalid_chunk_offset");
-        fs.writeSync(fd, buffer, 0, buffer.length, input.offset);
+        measured("writeMs", () => fs.writeSync(fd, buffer, 0, buffer.length, input.offset));
+        metrics.files++; metrics.bytes += buffer.length;
       } finally { fs.closeSync(fd); }
     });
     result = {};
@@ -182,7 +212,7 @@ if (input.operation === "home") {
     try { fs.fchmodSync(sourceFd, input.executable ? 0o700 : 0o600); } finally { fs.closeSync(sourceFd); }
     const target = full(input.path);
     try { const fd = checked(target); fs.closeSync(fd); } catch (error) { if (error.code !== "ENOENT") throw error; }
-    withParent(source, false, (from) => withParent(target, false, (to) => fs.renameSync(from, to))); result = {};
+    measured("publishMs", () => withParent(source, false, (from) => withParent(target, false, (to) => fs.renameSync(from, to)))); result = {};
   } else if (input.operation === "symlink") {
     parents(input.path);
     const target = full(input.path);
@@ -314,9 +344,9 @@ if (request.operation === "read-batch") {
   }
   const results = request.entries.map((entry) => execute({ operation: "read", root: request.root,
     path: entry.path, offset: 0, length: Math.max(1, entry.byteSize) }));
-  process.stdout.write(JSON.stringify(results));
+  output(results);
 } else if (request.operation === "batch-status") {
-  process.stdout.write(JSON.stringify(batchReceipt(request).read()));
+  output(batchReceipt(request).read());
 } else if (request.operation === "batch") {
   // Stdin is bounded and hashed exactly, before parsing or claiming execution.
   const chunks = [];
@@ -331,7 +361,7 @@ if (request.operation === "read-batch") {
   const body = Buffer.concat(chunks);
   if (createHash("sha256").update(body).digest("hex") !== request.batchSha256) throw new Error("batch_body_hash_mismatch");
   const receipt = batchReceipt(request);
-  const operations = JSON.parse(body.toString("utf8"));
+  const operations = measured("decodeMs", () => JSON.parse(body.toString("utf8")));
   if (!Array.isArray(operations) || operations.length > 512) throw new Error("invalid_batch");
   for (const operation of operations) {
     if (!operation || !["write", "publish", "mkdir"].includes(operation.operation)) throw new Error("invalid_batch_operation");
@@ -339,8 +369,8 @@ if (request.operation === "read-batch") {
   }
   if (!receipt.claim()) {
     const status = receipt.read();
-    if (status.state === "completed") process.stdout.write(JSON.stringify({ completed: status.completed }));
-    else if (status.state === "running") process.stdout.write(JSON.stringify({ pending: true }));
+    if (status.state === "completed") output({ completed: status.completed });
+    else if (status.state === "running") output({ pending: true });
     else throw new Error(status.state === "failed" ? "batch_execution_failed" : "batch_receipt_disappeared");
   } else {
     try {
@@ -358,8 +388,8 @@ if (request.operation === "read-batch") {
         "hardlink_not_allowed", "chunk_too_large", "invalid_chunk_offset", "content_changed_during_transfer"];
       throw new Error(safeErrors.includes(error.message) ? error.message : "batch_execution_failed");
     }
-    process.stdout.write(JSON.stringify({ completed: operations.length }));
+    output({ completed: operations.length });
   }
 } else {
-  process.stdout.write(JSON.stringify(execute(request)));
+  output(execute(request));
 }

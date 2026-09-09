@@ -1,3 +1,4 @@
+import { captureSandboxPerformanceContext, hasSandboxPerformanceTrace, measureSandboxOperation, measureSandboxStream } from "./sandbox-performance.js";
 import { readFile } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -6,6 +7,18 @@ import path from "node:path";
 import { z } from "zod";
 import type { CommandManagedRuntimeRunner } from "@paperclipai/adapter-utils/command-managed-runtime";
 import { validateWorkFilePath } from "@paperclipai/shared";
+
+const remoteNumber = z.number().finite().nonnegative();
+const remotePerformanceSchema = z.object({ result: z.unknown(), performance: z.object({
+  executionMs: remoteNumber, scanMs: remoteNumber, listMs: remoteNumber, gitListMs: remoteNumber, hashMs: remoteNumber, readMs: remoteNumber,
+  writeMs: remoteNumber, publishMs: remoteNumber, decodeMs: remoteNumber, encodeMs: remoteNumber,
+  files: remoteNumber, bytes: remoteNumber, hashFiles: remoteNumber, hashBytes: remoteNumber,
+  requestCount: remoteNumber, droppedPhases: remoteNumber,
+}), remotePhases: z.array(z.object({ phase: z.enum(["scanMs", "listMs", "gitListMs", "hashMs", "readMs", "writeMs", "publishMs", "decodeMs", "encodeMs"]),
+  startOffsetMs: remoteNumber, durationMs: remoteNumber })).max(256) });
+
+const remotePhaseNames = { scanMs: "scan", listMs: "list", gitListMs: "git_list", hashMs: "hash", readMs: "read",
+  writeMs: "write", publishMs: "publish", decodeMs: "decode", encodeMs: "encode" } as const;
 
 const entrySchema = z.object({ path: z.string().refine((value) => { try { validateWorkFilePath(value); return true; } catch { return false; } }),
   kind: z.enum(["file", "directory"]), byteSize: z.number().int().nonnegative().max(1024 ** 3),
@@ -38,27 +51,53 @@ export function workFolderTransport(runner: CommandManagedRuntimeRunner) {
   // small-argv transport without assuming additional capabilities.
   const bulkStdin = Boolean(runner.syncIn && runner.syncOut) || runner.supportsSingleStreamStdinProgress === true;
   async function command(input: Record<string, unknown>, stdin?: string, deadline = Date.now() + 120_000): Promise<unknown> {
-    source ??= readFile(new URL("./scripts/work-folder-io.mjs", import.meta.url), "utf8");
-    const args = ["--input-type=module", "-e", await source, Buffer.from(JSON.stringify(input)).toString("base64")];
-    const readOnly = ["home", "scan", "read", "read-batch", "batch-status"].includes(String(input.operation));
-    let result;
-    for (let attempt = 0; ; attempt++) {
-      if (Date.now() >= deadline) throw new Error("Work folder transfer deadline exceeded");
-      try {
-        result = await runner.execute({ command: "node", args, ...(stdin === undefined ? {} : { stdin }), bypassSession: true,
-          timeoutMs: Math.max(1, deadline - Date.now()) });
-        break;
-      } catch (error) {
-        // A lost read response is safe to repeat. Staging writes, publishes and
-        // moves may already have happened, so never replay them here.
-        const waitMs = 250 * (attempt + 1);
-        if (!readOnly || attempt >= 2 || !transientTransportFailure(error) || Date.now() + waitMs >= deadline) throw error;
-        await delay(waitMs);
+    const operation = String(input.operation);
+    return measureSandboxOperation("work_folder.transport.command", { operation }, async () => {
+      const args = await measureSandboxOperation("work_folder.transport.encode", { operation }, async (span) => {
+        source ??= readFile(new URL("./scripts/work-folder-io.mjs", import.meta.url), "utf8");
+        const encoded = Buffer.from(JSON.stringify({ ...input, performance: hasSandboxPerformanceTrace() })).toString("base64");
+        span.set({ bytes: Buffer.byteLength(encoded), inputBytes: stdin === undefined ? 0 : Buffer.byteLength(stdin) });
+        return ["--input-type=module", "-e", await source, encoded];
+      });
+      const readOnly = ["home", "scan", "read", "read-batch", "batch-status"].includes(operation);
+      for (let attempt = 0; ; attempt++) {
+        if (Date.now() >= deadline) throw new Error("Work folder transfer deadline exceeded");
+        let executionReturned = false;
+        try {
+          return await measureSandboxOperation("work_folder.transport.roundtrip", { operation, attempt: attempt + 1, requestCount: 1 }, async (span) => {
+            const startedAt = performance.now();
+            const result = await runner.execute({ command: "node", args, ...(stdin === undefined ? {} : { stdin }), bypassSession: true,
+              timeoutMs: Math.max(1, deadline - Date.now()) });
+            executionReturned = true;
+            const roundtripMs = performance.now() - startedAt;
+            span.set({ roundtripMs, outputBytes: Buffer.byteLength(result.stdout) });
+            if (result.exitCode !== 0 || result.timedOut) throw new Error(`Work folder ${operation} failed: ${result.stderr.slice(0, 1500)}`);
+            return measureSandboxOperation("work_folder.transport.decode", { operation }, async () => {
+              const decoded = JSON.parse(result.stdout);
+              // Older helpers and runners retain the unwrapped result contract.
+              if (decoded?.workFolderPerformanceVersion !== 1) return decoded;
+              const validated = remotePerformanceSchema.safeParse(decoded);
+              // Timing is diagnostic. A malformed timing envelope must not
+              // discard a valid command result or change its retry semantics.
+              if (!validated.success) { span.set({ dropped: 1 }); return decoded.result; }
+              const details = validated.data;
+              span.set({ ...details.performance, transportOverheadMs: Math.max(0, roundtripMs - details.performance.executionMs) });
+              for (const phase of details.remotePhases) {
+                span.recordRemotePhase(`work_folder.remote.${remotePhaseNames[phase.phase]}`, phase.startOffsetMs, phase.durationMs, { operation });
+              }
+              return details.result;
+            });
+          });
+        } catch (error) {
+          // Mutations may already have happened. Only reads repeat here.
+          const waitMs = 250 * (attempt + 1);
+          if (executionReturned || !readOnly || attempt >= 2 || !transientTransportFailure(error) || Date.now() + waitMs >= deadline) throw error;
+          await measureSandboxOperation("work_folder.transport.backoff", { operation, attempt: attempt + 1, waitMs }, () => delay(waitMs));
+        }
       }
-    }
-    if (result.exitCode !== 0 || result.timedOut) throw new Error(`Work folder ${String(input.operation)} failed: ${result.stderr.slice(0, 1500)}`);
-    return JSON.parse(result.stdout);
+    });
   }
+
   async function writeBatch(root: string, stagingRoot: string, body: string) {
     const deadline = Date.now() + 120_000;
     const identity = { root, stagingRoot, batchId: randomUUID(),
@@ -88,14 +127,18 @@ export function workFolderTransport(runner: CommandManagedRuntimeRunner) {
       // An upstream error may have lost only the response. First inspect the
       // sandbox receipt. A claimed batch is never replayed; it must complete
       // or remain visibly recoverable when this bounded wait expires.
-      const status = statusSchema.parse(await command({ operation: "batch-status", ...identity }, undefined, deadline));
+      const status = await measureSandboxOperation("work_folder.transport.receipt_reconcile", { attempt: attempts }, async (span) => {
+        const result = statusSchema.parse(await command({ operation: "batch-status", ...identity }, undefined, deadline));
+        span.set({ operation: result.state });
+        return result;
+      });
       if (status.state === "completed") return { completed: status.completed };
       if (status.state === "failed") throw new Error(`Work folder batch failed: ${status.error}`);
       pending = status.state === "running";
       if (!pending && attempts >= 3) throw lastError ?? new Error("Work folder batch receipt is missing");
       const waitMs = pending ? 500 : 250 * attempts;
       if (Date.now() + waitMs >= deadline) break;
-      await delay(waitMs);
+      await measureSandboxOperation("work_folder.transport.receipt_wait", { waitMs, attempt: attempts }, () => delay(waitMs));
     }
     throw new Error("Work folder batch outcome is uncertain; retaining sandbox for recovery");
   }
@@ -104,20 +147,25 @@ export function workFolderTransport(runner: CommandManagedRuntimeRunner) {
     return result.home;
   }
   async function scan(root: string, repository = false) {
-    return z.array(entrySchema).max(100_000).parse(await command({ operation: "scan", root, repository }));
+    return measureSandboxOperation("work_folder.transport.scan", { repository }, async (span) => {
+      const entries = z.array(entrySchema).max(100_000).parse(await command({ operation: "scan", root, repository }));
+      span.set({ files: entries.length, bytes: entries.reduce((sum, entry) => sum + entry.byteSize, 0) });
+      return entries;
+    });
   }
   function read(root: string, filePath: string, byteSize: number) {
     validateWorkFilePath(filePath);
-    return Readable.from((async function* () {
+    const inContext = captureSandboxPerformanceContext();
+    return measureSandboxStream("work_folder.transport.read_body", { bytes: byteSize }, Readable.from((async function* () {
       for (let offset = 0; offset < byteSize;) {
         const length = bulkStdin ? 1024 * 1024 : 256 * 1024;
-        const result = z.object({ data: z.string().max(Math.ceil(length / 3) * 4) }).parse(await command({ operation: "read", root, path: filePath, offset, length }));
-        const bytes = Buffer.from(result.data, "base64");
+        const result = z.object({ data: z.string().max(Math.ceil(length / 3) * 4) }).parse(await inContext(() => command({ operation: "read", root, path: filePath, offset, length })));
+        const bytes = await inContext(() => measureSandboxOperation("work_folder.transport.decode_bytes", { chunkIndex: Math.floor(offset / length) }, async () => Buffer.from(result.data, "base64")));
         if (bytes.length === 0 || offset + bytes.length > byteSize) throw new Error("Work file changed during transfer");
         offset += bytes.length;
         yield bytes;
       }
-    })());
+    })()));
   }
   async function readBatch(root: string, entries: WorkTreeEntry[]) {
     if (entries.length > 64) throw new Error("Work folder read batch exceeds entry limit");
@@ -132,20 +180,20 @@ export function workFolderTransport(runner: CommandManagedRuntimeRunner) {
     const result = z.array(z.object({ data: z.string().max(Math.ceil(1024 * 1024 / 3) * 4) })).max(64)
       .parse(await command({ operation: "read-batch", root, entries: entries.map(({ path, byteSize }) => ({ path, byteSize })) }));
     if (result.length !== entries.length) throw new Error("Work folder read batch did not complete");
-    return result.map(({ data }, index) => {
+    return measureSandboxOperation("work_folder.transport.decode_batch", { files: entries.length, bytes }, async () => result.map(({ data }, index) => {
       const buffer = Buffer.from(data, "base64");
       if (buffer.length !== entries[index]!.byteSize) throw new Error("Work file changed during transfer");
       return buffer;
-    });
+    }));
   }
   async function writeChunks(root: string, stagingRoot: string, entry: WorkTreeEntry, body: Readable) {
     const stagingPath = randomUUID();
     let offset = 0;
-    for await (const value of body) {
+    for await (const value of measureSandboxStream("work_folder.transport.incoming_body", { bytes: entry.byteSize }, body)) {
       const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
       for (let start = 0; start < chunk.length; start += WRITE_CHUNK_BYTES) {
         const bytes = chunk.subarray(start, start + WRITE_CHUNK_BYTES);
-        await command({ operation: "write", root: stagingRoot, path: stagingPath, offset, data: bytes.toString("base64") });
+        await command({ operation: "write", root: stagingRoot, path: stagingPath, offset, data: await measureSandboxOperation("work_folder.transport.encode_bytes", { bytes: bytes.length }, async () => bytes.toString("base64")) });
         offset += bytes.length;
       }
     }
@@ -161,7 +209,7 @@ export function workFolderTransport(runner: CommandManagedRuntimeRunner) {
     let bufferedBytes = 0;
     async function flush() {
       if (!operations.length) return;
-      const body = JSON.stringify(operations);
+      const body = await measureSandboxOperation("work_folder.transport.encode_batch", { files: publishedEntries.length, bytes: bufferedBytes, requestCount: operations.length }, async () => JSON.stringify(operations));
       if (Buffer.byteLength(body) > 8 * 1024 * 1024) throw new Error("Work folder batch exceeds transfer limit");
       if (publishedEntries.length) await beforePublish?.(publishedEntries);
       const result = await writeBatch(root, stagingRoot, body);
@@ -194,12 +242,12 @@ export function workFolderTransport(runner: CommandManagedRuntimeRunner) {
         }
         const stagingPath = randomUUID();
         let offset = 0;
-        for await (const value of body) {
+        for await (const value of measureSandboxStream("work_folder.transport.incoming_body", { bytes: entry.byteSize }, body)) {
           const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
           for (let start = 0; start < chunk.length; start += 256 * 1024) {
             const bytes = chunk.subarray(start, start + 256 * 1024);
             if (offset + bytes.length > entry.byteSize) throw new Error("Work file size changed during transfer");
-            await append({ operation: "write", path: stagingPath, offset, data: bytes.toString("base64") }, bytes.length);
+            await append({ operation: "write", path: stagingPath, offset, data: await measureSandboxOperation("work_folder.transport.encode_bytes", { bytes: bytes.length }, async () => bytes.toString("base64")) }, bytes.length);
             offset += bytes.length;
           }
         }

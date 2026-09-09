@@ -1,3 +1,4 @@
+import { captureSandboxPerformanceContext, measureSandboxOperation, measureSandboxStream } from "./sandbox-performance.js";
 import { Readable } from "node:stream";
 import type { WorkTreeEntry } from "./work-folder-transport.js";
 
@@ -37,7 +38,7 @@ export function createWorkFolderReadCache(
       cached.delete(group); cached.set(group, result);
       return result;
     }
-    result = Promise.resolve().then(() => load(group)).then((buffers) => {
+    result = measureSandboxOperation("work_folder.read_cache.load", { files: group.length, bytes: group.reduce((sum, entry) => sum + entry.byteSize, 0) }, () => load(group)).then((buffers) => {
       if (buffers.length !== group.length || buffers.some((buffer, index) =>
         !Buffer.isBuffer(buffer) || buffer.length !== group[index]!.byteSize)) {
         throw new Error("Work folder batch content does not match its entries");
@@ -58,15 +59,17 @@ export function createWorkFolderReadCache(
     const location = locations.get(entry.path);
     // Mark each source request, even if its stream is never consumed. A retry
     // must reopen the physical file instead of replaying possibly stale bytes.
-    return Readable.from((async function* () {
+    const inContext = captureSandboxPerformanceContext();
+    return measureSandboxStream("work_folder.read_cache.body", { bytes: entry.byteSize, repeated }, Readable.from((async function* () {
       if (cleared || repeated || !location) {
-        const source = fallback(entry);
+        const source = inContext(() => fallback(entry));
         try { yield* source; } finally { source.destroy(); }
         return;
       }
-      const buffers = await getBatch(location.batch);
+      const buffers = await inContext(() => measureSandboxOperation("work_folder.read_cache.lookup",
+        { cacheHit: cached.has(location.batch), files: location.batch.length }, async () => getBatch(location.batch)));
       yield buffers[location.index]!;
-    })());
+    })()));
   }
   function clear() {
     cleared = true;

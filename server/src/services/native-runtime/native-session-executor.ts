@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { hasSandboxPerformanceTrace } from "../sandbox-performance.js";
+import { getActiveStepContext } from "@paperclipai/adapter-utils/acpx-engine/startup-timing";
 import {
   chmodSync,
   closeSync,
@@ -3759,7 +3761,11 @@ async function executePaperclipNativeSessionWithinScope(
       "paperclip_runner_provider_unsupported: ACPX Pi requires the native runner's descriptor-confined verified launch",
     );
   }
-  const earliestPreparationStart = input.preparationSpans?.reduce(
+  // Full host diagnostics already measured preparation in its real scopes.
+  // Do not backdate a second aggregate over those operations or detach this
+  // native subtree from the live dispatch parent.
+  const hostMeasured = hasSandboxPerformanceTrace();
+  const earliestPreparationStart = hostMeasured ? Date.now() : input.preparationSpans?.reduce(
     (earliest, span) => Math.min(earliest, span.startedAtMs),
     Date.now(),
   );
@@ -3767,8 +3773,9 @@ async function executePaperclipNativeSessionWithinScope(
     runId: input.execution.binding.runId,
     startedAtMs: earliestPreparationStart,
     onEvent: input.onEvent,
+    parentContext: hostMeasured ? getActiveStepContext()?.parentContext : undefined,
   });
-  const preparationSpans = input.preparationSpans ?? [];
+  const preparationSpans = hostMeasured ? [] : input.preparationSpans ?? [];
   const taskPrepareScope = trace.start("task.prepare", {
     parentName: "task.run",
     startedAtMs: earliestPreparationStart,

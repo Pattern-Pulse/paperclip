@@ -33,7 +33,7 @@ describe("runner E2E Daytona image contract", () => {
     ]);
     const normalizedDockerfile = dockerfile.replace(/\\\r?\n\s*/g, " ");
     expect(dockerfile).toContain("--bin paperclip-runnerd");
-    expect(dockerfile).toContain("build-provider-pack.mjs /provider-pack");
+    expect(dockerfile).toContain("assemble-provider-pack.mjs /provider-pack");
     expect(normalizedDockerfile).not.toContain(
       "COPY packages/paperclip-eval-kernel ./packages/paperclip-eval-kernel",
     );
@@ -166,6 +166,21 @@ describe("runner E2E Daytona image contract", () => {
     expect(cliInstall).toBeLessThan(finalMetadataArgs);
   });
 
+  it("exports the canonical provider stage without a mutable base or recursive builder", async () => {
+    const dockerfile = await readFile(path.join(repositoryRoot, "docker/daytona-runner/Dockerfile"), "utf8");
+    expect(dockerfile).toContain("FROM scratch AS provider-pack-export\nCOPY --from=provider-pack-build /provider-pack /");
+    expect(extractDaytonaBaseImages(dockerfile)).not.toContain("scratch");
+    expect(() => extractDaytonaBaseImages("FROM node:latest\nFROM scratch AS exported")).toThrow("immutable");
+    const builder = await readFile(path.join(repositoryRoot, "packages/paperclip-runner/scripts/build-provider-pack.mjs"), "utf8");
+    expect(builder).toContain('"--target", "provider-pack-export"');
+    expect(builder).toContain('"--platform", "linux/amd64"');
+    expect(builder).toContain("verifyProviderPack(exported");
+    expect(dockerfile).not.toContain("build-provider-pack.mjs /provider-pack");
+    for (const file of ["assemble-provider-pack.mjs", "provider-pack-integrity.mjs"]) {
+      expect(DAYTONA_IMAGE_INPUT_PATHS).toContain(`packages/paperclip-runner/scripts/${file}`);
+    }
+  });
+
   it("builds both provider packs from the same verified dedicated lock before compiling", async () => {
     const lockPath = "docker/daytona-runner/provider-dependencies.lock.yaml";
     const lock = await readFile(path.join(repositoryRoot, lockPath));
@@ -189,7 +204,7 @@ describe("runner E2E Daytona image contract", () => {
         "pnpm --filter @paperclipai/paperclip-runner build:typescript",
       );
       const pack = normalized.indexOf(
-        "node packages/paperclip-runner/scripts/build-provider-pack.mjs /provider-pack",
+        "node packages/paperclip-runner/scripts/assemble-provider-pack.mjs /provider-pack",
       );
       expect(normalized).toContain(`ARG PAPERCLIP_RUNNER_LOCK_SHA256=${lockDigest}`);
       expect(copy).toBeGreaterThan(0);

@@ -1,3 +1,11 @@
+import { runWithSandboxPerformanceTrace, type SandboxPerformanceRecord } from "../services/sandbox-performance.js";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { localTestWorkFolderRunner } from "./helpers/work-folder-runner.js";
+import { workFolderTransport } from "../services/work-folder-transport.js";
 import { createHash, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { setImmediate } from "node:timers/promises";
@@ -81,6 +89,57 @@ describe("bounded repository checkpoint transfers", () => {
     };
   }
 
+  it("checkpoints Git ignore policy without uploading or removing local ignored dependencies", async () => {
+    const f = await fixture();
+    const base = await realpath(await mkdtemp(path.join(os.tmpdir(), "repository-ignore-")));
+    const root = path.join(base, "source"), restored = path.join(base, "restored"), staging = path.join(base, "staging");
+    const git = promisify(execFile);
+    try {
+      await git("git", ["init", root]);
+      await writeFile(path.join(root, "tracked"), "tracked original");
+      await git("git", ["-C", root, "add", "tracked"]);
+      await git("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"]);
+      await writeFile(path.join(root, ".gitignore"), "node_modules/\ntracked\n");
+      await mkdir(path.join(root, "nested/cache"), { recursive: true });
+      await mkdir(path.join(root, "node_modules"));
+      await writeFile(path.join(root, "nested/.gitignore"), "cache/\n");
+      await writeFile(path.join(root, ".git/info/exclude"), "local-only\n");
+      const ignored = ["node_modules/dependency", "nested/cache/dependency", "local-only"];
+      for (const file of ignored) await writeFile(path.join(root, file), `ignored:${file}`);
+      await writeFile(path.join(root, "tracked"), "tracked changed");
+      await writeFile(path.join(root, "nested/keep"), "untracked work");
+      const actual = workFolderTransport({ ...localTestWorkFolderRunner, supportsSingleStreamStdinProgress: true });
+      const service = workFolderRepositoryService(db, f.storage, actual);
+      const records: SandboxPerformanceRecord[] = [];
+      const trace = { runId: "repository-ignore", enabled: true, onBatch: async (batch: { records: SandboxPerformanceRecord[] }) => { records.push(...batch.records); } };
+      await runWithSandboxPerformanceTrace(trace, () => service.checkpoint(f.binding, root));
+      const current = await f.current();
+      const manifest = JSON.parse(f.objects.get(current.checkpointKey!)!.toString());
+      const durablePaths = manifest.files.map((entry: { path: string }) => entry.path);
+      expect(durablePaths).toContain("tracked");
+      expect(durablePaths).toContain("nested/keep");
+      expect(durablePaths).toContain(".git/info/exclude");
+      for (const file of ignored) {
+        expect(durablePaths).not.toContain(file);
+        expect(await readFile(path.join(root, file), "utf8")).toBe(`ignored:${file}`);
+        expect([...f.objects.values()].some((body) => body.toString() === `ignored:${file}`)).toBe(false);
+      }
+      await mkdir(staging);
+      await runWithSandboxPerformanceTrace(trace, () => service.restore(current, restored, staging));
+      for (const phase of ["lookup", "object_intent", "object_head", "object_upload", "manifest_upload", "publish_lock", "protect_objects", "publish_pointer", "manifest_download", "manifest_body", "manifest_decode", "object_download"]) {
+        expect(records.some((record) => record.name === `work_folder.repository.${phase}`)).toBe(true);
+      }
+      for (const secret of [root, restored, f.binding.id, companyId, "tracked changed"]) expect(JSON.stringify(records)).not.toContain(secret);
+      expect(await readFile(path.join(restored, "tracked"), "utf8")).toBe("tracked changed");
+      expect(await readFile(path.join(restored, "nested/keep"), "utf8")).toBe("untracked work");
+      for (const file of ignored) await expect(readFile(path.join(restored, file))).rejects.toMatchObject({ code: "ENOENT" });
+      // Restoring into the existing workspace must preserve reusable ignored caches.
+      await service.restore(current, root, staging);
+      for (const file of ignored) expect(await readFile(path.join(root, file), "utf8")).toBe(`ignored:${file}`);
+      const listed = await git("git", ["-C", restored, "ls-files", "--cached", "--others", "--exclude-standard"]);
+      expect(listed.stdout).toContain("tracked");
+    } finally { await rm(base, { recursive: true, force: true }); }
+  }, 60_000);
   it("bounds HEADs and streaming PUTs to four, deduplicates content, and preserves manifest order", async () => {
     const f = await fixture();
     const entries = [f.file("z"), f.file("b"), f.file("same-z", "z"),

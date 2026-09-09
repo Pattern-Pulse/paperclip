@@ -37,9 +37,13 @@ ARG PAPERCLIP_RUNNER_SOURCE_REVISION
 RUN test -n "${PAPERCLIP_RUNNER_SOURCE_REVISION}"
 RUN pnpm --filter @paperclipai/paperclip-runner build:typescript \
     && PAPERCLIP_RUNNER_SOURCE_REVISION="${PAPERCLIP_RUNNER_SOURCE_REVISION}" \
-      node packages/paperclip-runner/scripts/build-provider-pack.mjs /provider-pack \
+      node packages/paperclip-runner/scripts/assemble-provider-pack.mjs /provider-pack \
     && node packages/paperclip-runner/scripts/verify-pi-provider-launch.mjs /provider-pack \
     && chmod -R a+rX /provider-pack
+
+# The trusted qualification entry exports the identical canonical provider stage.
+FROM scratch AS provider-pack-export
+COPY --from=provider-pack-build /provider-pack /
 
 # Fleet sandbox base image. Keep this section aligned with
 # paperclipai/paperclip-cloud/fleet-sandbox-image/Dockerfile. The only Paperclip

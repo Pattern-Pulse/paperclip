@@ -103,6 +103,8 @@ export function createNativeRunTrace(input: {
   startedAtMs?: number;
   onEvent?: NativeRunTraceSink;
   traceContext?: StartupTraceContextHandle;
+  /** The live host dispatch span when full sandbox diagnostics are enabled. */
+  parentContext?: unknown;
 }) {
   const tracing =
     input.traceContext ?? getStartupTraceContext("paperclip.native-runner");
@@ -118,7 +120,7 @@ export function createNativeRunTrace(input: {
         "paperclip.task.run.trace_schema_version":
           NATIVE_RUN_TRACE_SCHEMA_VERSION,
       },
-    });
+    }, input.parentContext);
   } catch {
     rootSpan = NOOP_SPAN;
   }
@@ -350,9 +352,10 @@ export function createNativeRunTrace(input: {
         },
       },
     );
-    return scopeStorage.run(state, () =>
+    const work = () => scopeStorage.run(state, () =>
       runWithRuntimeParent(dynamicContext, fn),
     );
+    return tracing.withContext ? tracing.withContext(dynamicContext, work) : work();
   };
 
   const record = async (span: NativeRunHistoricalSpan): Promise<void> => {

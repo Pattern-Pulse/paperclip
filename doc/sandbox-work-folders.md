@@ -377,6 +377,17 @@ or patches change, update both expected hashes, and qualify a new sandbox image.
 Matching source files alone does not prove matching dependencies: acceptance
 also compares the actual app and sandbox production-lock hashes.
 
+The qualification entry `build-provider-pack.mjs` (also exposed as
+`pnpm --filter @paperclipai/paperclip-runner build:provider-pack`) requires
+Docker with BuildKit and builds the canonical `linux/amd64` provider stage.
+It uses the same digest-pinned Node interpreter, dedicated dependency graph,
+and fresh TypeScript compilation as the sandbox image; host `node_modules`,
+CI's root lock and previously compiled outputs are not assembly inputs.
+Both Docker stages call the low-level assembler directly, avoiding recursion.
+The entry verifies exported manifest and artifact bytes before atomically
+replacing its output. Failed builds or validation preserve the previous pack.
+This produces a local artifact and does not publish an image or release.
+
 Native and legacy Git credential callbacks honor the same experimental duplex
 setting and provider capability gates. When streaming is disabled or unavailable,
 the file bridge remains supported. Credential acquisition allows 35 seconds per

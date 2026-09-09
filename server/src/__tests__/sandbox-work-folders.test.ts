@@ -1,3 +1,4 @@
+import { runWithSandboxPerformanceTrace, type SandboxPerformanceRecord } from "../services/sandbox-performance.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -161,6 +162,63 @@ describe("shared sandbox work-folder lifecycle", () => {
         runner: { supportsSingleStreamStdinProgress: options.bulkStdin, execute: (input) => localTestWorkFolderRunner.execute({ ...input, env: { ...input.env, HOME: home } }) } } });
     active.push(run); return run;
   }
+  it("records scoped startup and final checkpoint stages without private identities", async () => {
+    const task = randomUUID();
+    await db.insert(issues).values({ id: task, companyId, projectId, title: "Instrumented task", assigneeAgentId: agentId });
+    const home = path.join(root, "private-instrumented-home");
+    const physicalId = randomUUID();
+    const records: SandboxPerformanceRecord[] = [];
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    try { await runWithSandboxPerformanceTrace({ runId: randomUUID(), enabled: true,
+      onBatch: async (batch) => { records.push(...batch.records); } }, async () => {
+      const run = await prepare(home, randomUUID(), physicalId, null, { taskId: task });
+      await fs.writeFile(path.join(home, "task", "private-file-name"), "private-file-content");
+      const tick = intervals.mock.calls.find((call) => call[1] === 180_000)?.[0];
+      expect(typeof tick).toBe("function");
+      if (typeof tick !== "function") throw new Error("Missing periodic checkpoint callback");
+      tick();
+      await run.flush();
+      await run.stop();
+    }); } finally { intervals.mockRestore(); }
+    const prepared = records.find((record) => record.name === "work_folder.prepare")!;
+    expect(prepared.outcome).toBe("ok");
+    expect(prepared.attributes).toMatchObject({ cold: true, warm: false, reused: false });
+    for (const repo of records.filter((record) => record.name === "work_folder.repository.prepare")) {
+      expect(repo.attributes).toMatchObject({ exists: false, reused: false, cold: true, warm: false, cacheHit: false });
+    }
+    const periodic = records.find((record) => record.name === "work_folder.checkpoint" && record.attributes.phase === "periodic")!;
+    expect(periodic.parentId).toBe(prepared.parentId);
+    expect(periodic.outcome).toBe("ok");
+    expect(records.filter((record) => record.name === "work_folder.scope.incoming").map((record) => record.attributes.scope).sort()).toEqual(["agent", "project", "task", "user"]);
+    expect(records.filter((record) => record.name === "work_folder.repository.clone")).toHaveLength(2);
+    expect(records.filter((record) => record.name === "work_folder.repository.setup")).toHaveLength(2);
+    const finalized = records.find((record) => record.name === "work_folder.finalize")!;
+    const finalCheckpoint = records.find((record) => record.name === "work_folder.checkpoint" && record.attributes.phase === "final")!;
+    expect(finalCheckpoint.parentId).toBe(finalized.id);
+    expect(finalCheckpoint.outcome).toBe("ok");
+    expect(records.some((record) => record.name === "work_folder.db.query" && record.attributes.requestCount === 1)).toBe(true);
+    expect(records.some((record) => record.name === "work_folder.progress.save")).toBe(true);
+    for (const secret of [task, companyId, agentId, home, "private-file-name", "private-file-content"]) expect(JSON.stringify(records)).not.toContain(secret);
+    // A new lease of the same physical sandbox is warm regardless of provider
+    // power state. A fresh physical sandbox restores saved repositories cold.
+    for (const samePhysicalSandbox of [true, false]) {
+      const observed: SandboxPerformanceRecord[] = [];
+      await runWithSandboxPerformanceTrace({ runId: randomUUID(), enabled: true,
+        onBatch: async (batch) => { observed.push(...batch.records); } }, async () => {
+        const resumed = await prepare(samePhysicalSandbox ? home : path.join(root, "instrumented-replacement"),
+          randomUUID(), samePhysicalSandbox ? physicalId : randomUUID(), null, { taskId: task });
+        await resumed.stop();
+      });
+      expect(observed.find((record) => record.name === "work_folder.prepare")!.attributes)
+        .toMatchObject({ cold: !samePhysicalSandbox, warm: samePhysicalSandbox, reused: samePhysicalSandbox });
+      const repositories = observed.filter((record) => record.name === "work_folder.repository.prepare");
+      expect(repositories).toHaveLength(2);
+      for (const repo of repositories) expect(repo.attributes).toMatchObject({ exists: samePhysicalSandbox,
+        reused: samePhysicalSandbox, cold: !samePhysicalSandbox, warm: samePhysicalSandbox, cacheHit: !samePhysicalSandbox });
+      expect(observed.filter((record) => record.name === "work_folder.repository.clone")).toHaveLength(0);
+    }
+
+  }, 60_000);
   it("uses downloaded metadata when a shared file changes after the startup listing", async () => {
     const svc = workFolderService(db, storage);
     const folder = await svc.ensure({ companyId, scope: "project", ownerId: projectId });

@@ -6,6 +6,7 @@ import { Readable } from "node:stream";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { runWithSandboxPerformanceTrace, type SandboxPerformanceRecord } from "../services/sandbox-performance.js";
 import { workFolderTransport } from "../services/work-folder-transport.js";
 import { localTestWorkFolderRunner } from "./helpers/work-folder-runner.js";
 
@@ -18,6 +19,70 @@ describe("sandbox work folder transport with real Node and Git", () => {
     roots.push(dir); return dir;
   }
   afterEach(async () => { for (const dir of roots.splice(0)) await rm(dir, { recursive: true, force: true }); });
+  it("records host and remote timing without changing bytes or exporting paths", async () => {
+    const dir = await root(), staging = await root();
+    const payload = Buffer.from("private-file-content");
+    const records: SandboxPerformanceRecord[] = [];
+    const fast = workFolderTransport({ ...localTestWorkFolderRunner, supportsSingleStreamStdinProgress: true });
+    await runWithSandboxPerformanceTrace({ runId: "test-run", enabled: true,
+      onBatch: async (batch) => { records.push(...batch.records); } }, async () => {
+      await fast.write(dir, staging, { path: "sensitive-file-name", kind: "file", byteSize: payload.length,
+        sha256: createHash("sha256").update(payload).digest("hex"), executable: false }, Readable.from([payload]));
+      const files = await fast.scan(dir);
+      expect(await fast.readBatch!(dir, files.filter((entry) => entry.kind === "file"))).toEqual([payload]);
+    });
+    const roundtrip = records.find((record) => record.name === "work_folder.transport.roundtrip" && record.attributes.operation === "batch");
+    expect(roundtrip?.attributes.executionMs).toBeGreaterThanOrEqual(0);
+    expect(roundtrip?.attributes.transportOverheadMs).toBeGreaterThanOrEqual(0);
+    expect(records.some((record) => record.name === "work_folder.transport.incoming_body")).toBe(true);
+    expect(records.some((record) => record.name === "work_folder.transport.encode_bytes")).toBe(true);
+    const remote = records.filter((record) => record.clock === "remote_relative");
+    expect(remote.length).toBeGreaterThan(0);
+    expect(remote.some((record) => record.name === "work_folder.remote.hash")).toBe(true);
+    expect(remote.some((record) => record.name === "work_folder.remote.scan")).toBe(true);
+    expect(remote.some((record) => record.name === "sandbox.invalid_operation")).toBe(false);
+    expect(remote.every((record) => records.some((parent) => parent.id === record.parentId && parent.name === "work_folder.transport.roundtrip"))).toBe(true);
+    for (const secret of [dir, staging, "sensitive-file-name", payload.toString()]) expect(JSON.stringify(records)).not.toContain(secret);
+    expect(await readFile(path.join(dir, "sensitive-file-name"))).toEqual(payload);
+  });
+  it("keeps the helper's original raw result when performance is not requested", async () => {
+    const script = await readFile(new URL("../services/scripts/work-folder-io.mjs", import.meta.url), "utf8");
+    const result = await exec(process.execPath, ["--input-type=module", "-e", script,
+      Buffer.from(JSON.stringify({ operation: "home" })).toString("base64")]);
+    expect(JSON.parse(result.stdout)).toEqual({ home: os.homedir() });
+    expect(result.stdout).not.toContain("workFolderPerformanceVersion");
+  });
+  it("does not discard a valid result or retry a command because diagnostics are malformed", async () => {
+    const execute = vi.fn().mockResolvedValue({ exitCode: 0, timedOut: false, stderr: "", stdout: JSON.stringify({
+      workFolderPerformanceVersion: 1, result: { home: "/home/daytona" }, performance: { executionMs: "invalid" },
+    }) });
+    const records: SandboxPerformanceRecord[] = [];
+    await runWithSandboxPerformanceTrace({ runId: "run", enabled: true,
+      onBatch: async (batch) => { records.push(...batch.records); } }, async () => {
+      expect(await workFolderTransport({ execute }).home()).toBe("/home/daytona");
+    });
+    expect(execute).toHaveBeenCalledOnce();
+    expect(records.find((record) => record.name === "work_folder.transport.roundtrip")?.attributes.dropped).toBe(1);
+    execute.mockClear().mockResolvedValue({ exitCode: 1, timedOut: false, stderr: "socket hang up", stdout: "" });
+    await expect(workFolderTransport({ execute }).home()).rejects.toThrow("socket hang up");
+    expect(execute).toHaveBeenCalledOnce();
+  });
+  it("bounds remote phase records while retaining complete aggregate hash counts", async () => {
+    const dir = await root();
+    await Promise.all(Array.from({ length: 300 }, (_, index) => writeFile(path.join(dir, `file-${index}`), "x")));
+    const script = await readFile(new URL("../services/scripts/work-folder-io.mjs", import.meta.url), "utf8");
+    const response = await exec(process.execPath, ["--input-type=module", "-e", script,
+      Buffer.from(JSON.stringify({ operation: "scan", root: dir, performance: true })).toString("base64")]);
+    const decoded = JSON.parse(response.stdout);
+    expect(decoded.result).toHaveLength(300);
+    expect(decoded.remotePhases).toHaveLength(256);
+    expect(decoded.performance.hashFiles).toBe(300);
+    expect(decoded.performance.hashBytes).toBe(300);
+    expect(decoded.performance.droppedPhases).toBeGreaterThan(0);
+    expect(decoded.performance.executionMs).toBeGreaterThanOrEqual(decoded.performance.scanMs);
+    expect(JSON.stringify(decoded.remotePhases)).not.toContain(dir);
+    expect(JSON.stringify(decoded.remotePhases)).not.toContain("file-");
+  });
   it("retries a lost read response without duplicating streamed bytes", async () => {
     const dir = await root();
     const body = Buffer.alloc(700_000, "x");
@@ -188,12 +253,28 @@ describe("sandbox work folder transport with real Node and Git", () => {
     await exec("git", ["-C", dir, "add", "."]);
     await exec("git", ["-C", dir, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"]);
     await writeFile(path.join(dir, "tracked"), "unstaged");
+    // A tracked path remains durable even when a later ignore rule matches it.
+    await writeFile(path.join(dir, ".gitignore"), "node_modules/\ntracked\n");
+    await mkdir(path.join(dir, "nested"));
+    await writeFile(path.join(dir, "nested/.gitignore"), "cache/\n*.generated\n");
+    await mkdir(path.join(dir, "nested/cache"));
+    await writeFile(path.join(dir, "nested/cache/dependency"), "local cache");
+    await writeFile(path.join(dir, "nested/result.generated"), "generated");
+    await writeFile(path.join(dir, "nested/keep"), "new durable work");
+    await writeFile(path.join(dir, ".git/info/exclude"), "local-only\n");
+    await writeFile(path.join(dir, "local-only"), "local secret cache");
     await writeFile(path.join(dir, "untracked"), "new");
     await mkdir(path.join(dir, "node_modules"));
     await writeFile(path.join(dir, "node_modules/cache"), "ignored");
     const paths = (await transport.scan(dir, true)).map((entry) => entry.path);
     expect(paths).toContain("tracked");
     expect(paths).toContain("untracked");
+    expect(paths).toContain("nested/keep");
+    expect(paths).toContain("nested/.gitignore");
+    expect(paths).toContain(".git/info/exclude");
+    expect(paths).not.toContain("local-only");
+    expect(paths).not.toContain("nested/result.generated");
+    expect(paths.some((entry) => entry.startsWith("nested/cache/"))).toBe(false);
     expect(paths).toContain(".git/index");
     expect(paths).toContain(".git/HEAD");
     expect(paths).not.toContain(".git/config");
