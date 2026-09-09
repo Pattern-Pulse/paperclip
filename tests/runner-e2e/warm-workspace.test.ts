@@ -1,7 +1,10 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { daytonaWarmContinuityTask } from "./catalog.js";
 import { readWarmWorkspaceFile } from "./warm-workspace.js";
 
 const temporaryDirectories: string[] = [];
@@ -59,6 +62,46 @@ async function fixture() {
 }
 
 describe("warm workspace persistence observation", () => {
+  it.each([true, false])(
+    "keeps writes in the correct folder across separate shells (scoped=%s)",
+    async (scoped) => {
+      const { input } = await fixture();
+      const taskDirectory = path.join(input.workspacePath, "task files");
+      await mkdir(taskDirectory);
+      const env = { ...process.env };
+      if (scoped) env.PAPERCLIP_TASK_DIR = taskDirectory;
+      else delete env.PAPERCLIP_TASK_DIR;
+      const prompts = [
+        daytonaWarmContinuityTask.buildPrompt("nonce"),
+        ...daytonaWarmContinuityTask.buildFollowupMessages!("nonce"),
+      ];
+      for (const [index, prompt] of prompts.entries()) {
+        const shellPath = prompt.match(
+          /Use ("[^"\n]+") for every read and write\./,
+        )?.[1];
+        expect(shellPath).toBeTruthy();
+        await promisify(execFile)(
+          "sh",
+          ["-c", `printf 'T${index + 1}-nonce\\n' >> ${shellPath}`],
+          { cwd: input.workspacePath, env },
+        );
+      }
+      expect(
+        await readFile(
+          path.join(
+            scoped ? taskDirectory : input.workspacePath,
+            input.filename,
+          ),
+          "utf8",
+        ),
+      ).toBe("T1-nonce\nT2-nonce\nT3-nonce\n");
+      if (scoped)
+        await expect(
+          readFile(path.join(input.workspacePath, input.filename)),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
   it("reads the saved scoped file without requiring a mirrored host file", async () => {
     const { input } = await fixture();
     expect(await readWarmWorkspaceFile(input)).toEqual({

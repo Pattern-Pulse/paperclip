@@ -777,7 +777,7 @@ function warmWorkspaceLine(turn: 1 | 2 | 3, nonce: string) {
 }
 
 function warmTurnInstructions(turn: 1 | 2 | 3, nonce: string) {
-  const file = `daytona-warm-${nonce}.txt`;
+  const file = `"\${PAPERCLIP_TASK_DIR:-$PWD}/daytona-warm-${nonce}.txt"`;
   const lines = Array.from({ length: turn }, (_, index) =>
     warmWorkspaceLine((index + 1) as 1 | 2 | 3, nonce),
   );
@@ -787,12 +787,12 @@ function warmTurnInstructions(turn: 1 | 2 | 3, nonce: string) {
     ? `In a legacy runner, make exactly one public-API completion write after verification: PATCH /api/issues/$PAPERCLIP_TASK_ID with {"status":"done","comment":"${marker}"}. Include Authorization and X-Paperclip-Run-Id. Do not POST a separate comment.`
     : `In a legacy runner, after verification POST exactly one request_confirmation to /api/issues/$PAPERCLIP_TASK_ID/interactions with {"kind":"request_confirmation","idempotencyKey":"daytona-warm-review-T${turn}-${nonce}","resolverPolicy":"human_only","title":"Warm continuity turn ${turn}","summary":"Review completed warm continuity turn ${turn}.","continuationPolicy":"wake_assignee","payload":{"version":1,"prompt":"Is this warm continuity task ready to complete after turn ${turn}?","acceptLabel":"Approve completion","rejectLabel":"Continue work","rejectRequiresReason":true,"allowDeclineReason":true,"supersedeOnUserComment":false,"target":{"type":"custom","key":"daytona_warm_turn_${turn}","revisionId":"${nonce}-T${turn}","label":"Warm continuity turn ${turn}"}}}. Capture the returned interaction id. Then make exactly one issue PATCH with {"status":"in_review","comment":"${marker}","reviewInteractionId":"<returned interaction id>"}. Include Authorization and X-Paperclip-Run-Id on both writes. If the issue PATCH fails, retry only that PATCH and never create another interaction. Do not POST a separate comment. After both writes succeed, end the response and heartbeat immediately; do not wait or poll because the reviewer action will start the next turn.`;
   return [
-    `This is warm Daytona continuity turn ${turn} of 3. Before reading or writing the file, run: if [ -n "\${PAPERCLIP_TASK_DIR:-}" ]; then cd "$PAPERCLIP_TASK_DIR"; fi. Use the scoped task folder when supplied; otherwise keep the current execution workspace. Do this on every turn.`,
+    `This is warm Daytona continuity turn ${turn} of 3. Use ${file} for every read and write. Expand this shell path inside each tool invocation; do not rely on a directory change in a previous shell call. The host-supplied task folder takes precedence over the current directory.`,
     turn === 1
       ? `Create ${file} with exactly this one line followed by a newline: ${lines[0]}`
       : `Before changing anything, read ${file} and verify its content is exactly ${lines.slice(0, -1).join("\\n")} followed by a newline. Then append exactly ${lines.at(-1)} followed by a newline.`,
     `After the write, verify ${file} contains exactly these lines, once each and in order: ${lines.join(" | ")}.`,
-    `In a native runner, call paperclip_finish exactly once with {reportedWorkDisposition:"${finalTurn ? "done" : "needs_review"}",summary:"${marker}",completionClaim:{contractRevision:"1",objectiveSatisfied:true,criteria:[{criterionId:"objective",status:"satisfied",evidenceRefs:[]}],remainingWork:[]},evidence:[],verification:[{commandOrCheck:"read ${file}",status:"passed"}]}. Wait for that tool call to succeed, then emit exactly ${marker} once as the complete user-facing final response.`,
+    `In a native runner, call paperclip_finish exactly once with {reportedWorkDisposition:"${finalTurn ? "done" : "needs_review"}",summary:"${marker}",completionClaim:{contractRevision:"1",objectiveSatisfied:true,criteria:[{criterionId:"objective",status:"satisfied",evidenceRefs:[]}],remainingWork:[]},evidence:[],verification:[{commandOrCheck:${JSON.stringify(`read ${file}`)},status:"passed"}]}. Wait for that tool call to succeed, then emit exactly ${marker} once as the complete user-facing final response.`,
     legacyCompletion,
     `In a legacy runner, the PATCH comment is the complete visible response. After its 2xx response, finish silently: do not print, echo, or emit ${marker} again as assistant text.`,
     `Do not include ${marker} in any other visible response or write. Do not recreate, truncate, reorder, or duplicate prior lines.`,

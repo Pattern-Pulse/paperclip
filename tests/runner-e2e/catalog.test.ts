@@ -106,7 +106,7 @@ describe("runner E2E catalog", () => {
       daytonaWarmContinuityTask.buildFollowupMessages?.("nonce") ?? [];
     for (const prompt of [initialPrompt, ...followups]) {
       expect(prompt).toContain(
-        'if [ -n "${PAPERCLIP_TASK_DIR:-}" ]; then cd "$PAPERCLIP_TASK_DIR"; fi',
+        '"${PAPERCLIP_TASK_DIR:-$PWD}/daytona-warm-nonce.txt"',
       );
     }
     expect(initialPrompt).toContain('"kind":"request_confirmation"');
