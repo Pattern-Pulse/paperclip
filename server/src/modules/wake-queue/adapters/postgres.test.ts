@@ -196,16 +196,14 @@ describeEmbeddedPostgres("wake-queue postgres adapter", () => {
     const companyId = await seedCompany();
     const otherCompanyId = await seedCompany();
     const agentId = await seedAgent({ companyId });
-    const issueId = await seedIssue({ companyId, assigneeAgentId: agentId });
+    const issueId = await seedIssue({ companyId, assigneeAgentId: agentId, status: "blocked" });
+    await db.update(issues).set({ executionState: { phase: "running" } }).where(eq(issues.id, issueId));
     const wakeId = await seedDeferredWake({ companyId, agentId, issueId });
+    const runId = await seedRun({ companyId, agentId, contextSnapshot: { issueId }, status: "succeeded" });
 
     const adapter = createPostgresWakeQueueAdapter(db, stubDeps);
     await adapter.withIssueExecutionLock(
-      {
-        companyId,
-        runId: (await seedRun({ companyId, agentId, contextSnapshot: { issueId }, status: "succeeded" })),
-        now: new Date(),
-      },
+      { companyId, runId, now: new Date() },
       async (_locked, ports) => {
         const cancelledUnderWrongCompany = await ports.writer.cancelDeferredWake({
           companyId: otherCompanyId,
@@ -231,6 +229,13 @@ describeEmbeddedPostgres("wake-queue postgres adapter", () => {
         });
         expect(normalizedUnderWrongCompany).toBeNull();
 
+        const reopenedUnderWrongCompany = await ports.writer.reopenIssue({
+          companyId: otherCompanyId,
+          issueId,
+          runId,
+        });
+        expect(reopenedUnderWrongCompany).toBeNull();
+
         return { outcome: { kind: "released" as const }, postCommitEffects: [] };
       },
     );
@@ -238,6 +243,58 @@ describeEmbeddedPostgres("wake-queue postgres adapter", () => {
     const wakeRow = (await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, wakeId)))[0];
     expect(wakeRow?.status).toBe("deferred_issue_execution");
     expect(wakeRow?.error).toBeNull();
+    const issueRow = (await db.select().from(issues).where(eq(issues.id, issueId)))[0];
+    expect(issueRow?.status).toBe("blocked");
+    expect(issueRow?.executionState).toEqual({ phase: "running" });
+  });
+
+  // Review defect: the reopen path must carry the company into every read,
+  // lock, and write. A check before the write is not a boundary, because
+  // `issues.company_id` can change between that check and the write.
+  it("refuses to reopen an issue for a company that does not own it, and leaves the issue untouched", async () => {
+    const companyId = await seedCompany();
+    const otherCompanyId = await seedCompany();
+    const agentId = await seedAgent({ companyId });
+    const issueId = await seedIssue({ companyId, assigneeAgentId: agentId, status: "blocked" });
+    await db.update(issues).set({ executionState: { phase: "running" } }).where(eq(issues.id, issueId));
+    const runId = await seedRun({ companyId, agentId, contextSnapshot: { issueId }, status: "succeeded" });
+
+    const adapter = createPostgresWakeQueueAdapter(db, stubDeps);
+    const captured: { reopened: { status: string; executionState: Record<string, unknown> | null } | null } = {
+      reopened: null,
+    };
+    await adapter.withIssueExecutionLock({ companyId, runId, now: new Date() }, async (_locked, ports) => {
+      captured.reopened = await ports.writer.reopenIssue({ companyId: otherCompanyId, issueId, runId });
+      return { outcome: { kind: "released" as const }, postCommitEffects: [] };
+    });
+    expect(captured.reopened).toBeNull();
+
+    const issueRow = (await db.select().from(issues).where(eq(issues.id, issueId)))[0];
+    expect(issueRow?.status).toBe("blocked");
+    expect(issueRow?.executionState).toEqual({ phase: "running" });
+  });
+
+  it("reopens an issue for the company that owns it, and clears the execution state", async () => {
+    const companyId = await seedCompany();
+    const agentId = await seedAgent({ companyId });
+    const issueId = await seedIssue({ companyId, assigneeAgentId: agentId, status: "blocked" });
+    await db.update(issues).set({ executionState: { phase: "running" } }).where(eq(issues.id, issueId));
+    const runId = await seedRun({ companyId, agentId, contextSnapshot: { issueId }, status: "succeeded" });
+
+    const adapter = createPostgresWakeQueueAdapter(db, stubDeps);
+    const captured: { reopened: { status: string; executionState: Record<string, unknown> | null } | null } = {
+      reopened: null,
+    };
+    await adapter.withIssueExecutionLock({ companyId, runId, now: new Date() }, async (_locked, ports) => {
+      captured.reopened = await ports.writer.reopenIssue({ companyId, issueId, runId });
+      return { outcome: { kind: "released" as const }, postCommitEffects: [] };
+    });
+    expect(captured.reopened?.status).toBe("todo");
+    expect(captured.reopened?.executionState).toBeNull();
+
+    const issueRow = (await db.select().from(issues).where(eq(issues.id, issueId)))[0];
+    expect(issueRow?.status).toBe("todo");
+    expect(issueRow?.executionState).toBeNull();
   });
 
   // Review test (c): a deferred-status compare-and-set that affects no row
