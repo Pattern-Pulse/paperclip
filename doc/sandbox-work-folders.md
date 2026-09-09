@@ -43,6 +43,31 @@ It preserves tool schemas, idempotent call IDs, cancellation, and the bridge's
 private-tool boundary. The bridge credential is injected at launch and excluded
 from persisted environment records; project extensions remain untrusted.
 
+## Existing tasks and upgrade compatibility
+
+Tasks that have already completed a sandbox run without work-folder persistence
+keep their original workspace, adapter file-sync/restore behavior, and provider
+session directories. Upgrading does not move, clean, or replace those files. This
+compatibility mode persists across turns and sandbox expiry; it does not claim
+the new scoped-folder or repository-checkpoint durability guarantee for old tasks.
+New tasks enter the scoped lifecycle below. Automatic migration of an old task's
+working tree into scoped folders is not performed.
+
+Version-1 reusable leases obtain their missing task and responsible-user identity
+from company-scoped host run records. Reuse still requires matching agent, task,
+user, environment, workspace, provider, and configuration fingerprint. Missing or
+conflicting identity records, configuration drift, or a failed resume retain the
+old sandbox and report a recovery error instead of destroying its only copy.
+The provider cannot opt a new task into this compatibility mode.
+
+Acceptance must resume representative pre-upgrade legacy and native tasks with
+committed, staged, unstaged, and untracked work, verify their original paths and
+usable continuation, and exercise their existing restore mechanism after a
+sandbox restart. A newly created task passing the scoped-folder matrix does not
+establish upgrade compatibility.
+
+## New sandbox tasks
+
 Sandbox runs use the operating-system user's home directory. Both legacy
 adapters and the native runner enter the same host-owned lifecycle before
 dispatch. Local execution keeps its existing workspace and home behavior.

@@ -33,6 +33,7 @@ import {
   runWithRuntimeParent,
   type StartupSpanContext,
 } from "@paperclipai/adapter-utils/acpx-engine/startup-timing";
+import { bindLegacySandboxIdentity, hasLegacySandboxWorkspace, taskUsesLegacySandboxWorkspace } from "./legacy-sandbox-workspace.js";
 import { retainUnsavedWorkFolderLease } from "./work-folder-retention.js";
 import { environmentService } from "./environments.js";
 import { instanceSettingsService } from "./instance-settings.js";
@@ -1710,6 +1711,12 @@ function createSandboxEnvironmentDriver(
     for (const lease of input.leases) {
       if (reusableIds.has(lease.id)) continue;
       if (!reusableLeaseCanBeCleanedUp(lease)) continue;
+      if (hasLegacySandboxWorkspace(lease)) {
+        await db.update(environmentLeases).set({ status: "retained", expiresAt: null,
+          cleanupStatus: "failed", failureReason: "legacy_workspace_recovery_required", updatedAt: new Date() })
+          .where(and(eq(environmentLeases.id, lease.id), eq(environmentLeases.companyId, lease.companyId)));
+        throw new Error("Existing sandbox workspace requires its original task, user, agent, and configuration; files were retained");
+      }
       await destroyReusableSandboxLease({
         environment: input.environment,
         lease,
@@ -1758,6 +1765,7 @@ function createSandboxEnvironmentDriver(
       const [boundRun] = input.heartbeatRunId ? await db.select({ responsibleUserId: heartbeatRuns.responsibleUserId })
         .from(heartbeatRuns).where(and(eq(heartbeatRuns.id, input.heartbeatRunId), eq(heartbeatRuns.companyId, input.companyId))) : [];
       const responsibleUserId = boundRun?.responsibleUserId ?? null;
+      const legacyWorkFolderLayout = await taskUsesLegacySandboxWorkspace(db, input.companyId, input.issueId);
       const storedParsed = parseEnvironmentDriverConfig(input.environment);
       const parsed = await resolveEnvironmentDriverConfigForRuntime(db, input.companyId, input.environment, {
         issueId: input.issueId,
@@ -1860,7 +1868,8 @@ function createSandboxEnvironmentDriver(
                 lease.metadata?.agentId === input.agentId,
               )
           : [];
-        const reusableExistingLeases = reusableCandidateLeases.filter((lease) =>
+        const identityBoundCandidates = await Promise.all(reusableCandidateLeases.map((lease) => bindLegacySandboxIdentity(db, lease)));
+        const reusableExistingLeases = identityBoundCandidates.filter((lease) =>
           reusableSandboxLeaseScopeMatches({
             lease,
             responsibleUserId,
@@ -1879,7 +1888,7 @@ function createSandboxEnvironmentDriver(
               lease.heartbeatRunId === input.heartbeatRunId,
           }),
         );
-        if (reusableCandidateLeases.some((lease) => lease.metadata?.workFolderRecoveryRequired === true && !reusableExistingLeases.includes(lease))) {
+        if (reusableCandidateLeases.some((lease) => lease.metadata?.workFolderRecoveryRequired === true && !reusableExistingLeases.some((candidate) => candidate.id === lease.id))) {
           throw new Error("Unsaved sandbox work requires recovery with its original run identity and configuration");
         }
         if (reusableCandidateLeases.length > reusableExistingLeases.length) {
@@ -1988,6 +1997,9 @@ function createSandboxEnvironmentDriver(
             });
           }
           if (!providerLease) {
+            if (hasLegacySandboxWorkspace(reusableLease)) {
+              throw new Error("Existing sandbox could not be resumed; its original workspace was retained");
+            }
             if (await retainUnsavedWorkFolderLease(db, reusableLease)) {
               throw new Error("Saved sandbox could not be resumed; unsaved work was retained for recovery");
             }
@@ -2080,6 +2092,7 @@ function createSandboxEnvironmentDriver(
           sandboxProviderPlugin: true,
           ...sandboxConfigForLeaseMetadata(storedConfig),
           ...sanitizedProviderMetadata,
+          workFolderLayout: legacyWorkFolderLayout || (reusableLease && hasLegacySandboxWorkspace(reusableLease)) ? "legacy" : "scoped",
           sandboxLeaseAcquisition: providerLease
             ? {
                 outcome: "resumed",
@@ -2222,7 +2235,8 @@ function createSandboxEnvironmentDriver(
                 lease.metadata?.agentId === input.agentId,
               )
           : [];
-      const reusableExistingLeases = reusableCandidateLeases.filter((lease) =>
+      const identityBoundCandidates = await Promise.all(reusableCandidateLeases.map((lease) => bindLegacySandboxIdentity(db, lease)));
+      const reusableExistingLeases = identityBoundCandidates.filter((lease) =>
         reusableSandboxLeaseScopeMatches({
           lease,
           responsibleUserId,
@@ -2241,7 +2255,7 @@ function createSandboxEnvironmentDriver(
             lease.heartbeatRunId === input.heartbeatRunId,
         }),
       );
-      if (reusableCandidateLeases.some((lease) => lease.metadata?.workFolderRecoveryRequired === true && !reusableExistingLeases.includes(lease))) {
+      if (reusableCandidateLeases.some((lease) => lease.metadata?.workFolderRecoveryRequired === true && !reusableExistingLeases.some((candidate) => candidate.id === lease.id))) {
         throw new Error("Unsaved sandbox work requires recovery with its original run identity and configuration");
       }
       if (reusableCandidateLeases.length > reusableExistingLeases.length) {
@@ -2265,7 +2279,7 @@ function createSandboxEnvironmentDriver(
 
       let providerLease;
       try {
-        if (reusableLease?.metadata?.workFolderRecoveryRequired === true) {
+        if (reusableLease && (reusableLease.metadata?.workFolderRecoveryRequired === true || hasLegacySandboxWorkspace(reusableLease))) {
           // Recovery overrides the original ephemeral disposal policy, after
           // the full host-owned identity/configuration fingerprint matched.
           providerLease = await resumeSandboxProviderLease({ config: parsed.config, providerLeaseId: reusableLease.providerLeaseId! });
@@ -2328,6 +2342,7 @@ function createSandboxEnvironmentDriver(
         driver: input.environment.driver,
         executionWorkspaceMode: input.executionWorkspaceMode,
         ...providerLease.metadata,
+        workFolderLayout: legacyWorkFolderLayout || (reusableLease && hasLegacySandboxWorkspace(reusableLease)) ? "legacy" : "scoped",
         sandboxLeaseAcquisition:
           reusableLease && providerLease.providerLeaseId === reusableLease.providerLeaseId
             ? {
@@ -3228,6 +3243,7 @@ function readString(value: unknown): string | null {
 // directly, so the worker never needs it as config. Drop every key here before
 // the runtime sends a config to a lifecycle RPC.
 const INTERNAL_PLUGIN_SANDBOX_CONFIG_KEYS = new Set([
+  "workFolderLayout",
   "driver",
   "executionWorkspaceMode",
   "pluginId",

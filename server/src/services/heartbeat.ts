@@ -3,6 +3,7 @@ import { githubBrokerEnvironment } from "@paperclipai/adapter-utils/github-launc
 import { cleanupGitHubOperationLaunchers, prepareGitHubOperationLaunchers, startAdapterExecutionTargetPaperclipBridge } from "@paperclipai/adapter-utils/execution-target";
 import fs from "node:fs/promises";
 import { retainUnsavedWorkFolderLease, workFolderSandboxKey } from "./work-folder-retention.js";
+import { hasLegacySandboxWorkspace } from "./legacy-sandbox-workspace.js";
 import { prepareSandboxWorkFolders } from "./sandbox-work-folders.js";
 import { bindWarmSandboxWorkspace } from "./sandbox-workspace-binding.js";
 import path from "node:path";
@@ -19760,7 +19761,10 @@ export function heartbeatService(
       await bindIssueToPersistedExecutionWorkspace(persistedExecutionWorkspace);
       const workspaceRealization = realizationResult.workspaceRealization;
       const executionTarget = realizationResult.executionTarget;
-      if (executionTarget?.kind === "remote" && executionTarget.transport === "sandbox") {
+      if (executionTarget?.kind === "remote" && executionTarget.transport === "sandbox"
+        && !hasLegacySandboxWorkspace(activeEnvironmentLease.lease)) {
+        // Existing task sandboxes keep their original adapter sync, cwd and CLI
+        // session homes. Do not migrate their only working copy during startup.
         // The coordinator owns folder identity, hydration and durability for
         // both legacy and native dispatch. Local execution never enters here.
         workFolderSaveFailed = true;
