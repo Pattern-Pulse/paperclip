@@ -24,7 +24,54 @@ stack ancestry. Neither the provisional count nor prior-head review is final
 verification. Root continues live qualification in the original worktree and
 does not push the remotely coordinated branch.
 
-## Current work — September 9, 21:05 UTC
+## Current work — September 9, 21:34 UTC
+
+Published integration head `ed1b6a6e…` remains **384 files**. Its fresh Greptile
+review completed at 21:11 UTC with **4/5**, identifying the tracked lockfile's
+missing `smol-toml` resolution. Official master `7cf9a377…` already contains the
+CI-generated lock refresh. Private merge `672366e0…` adopts precisely that
+official lock, with no other tree delta from ed1 and no PR three-dot lockfile
+change. Actual `pnpm --frozen-lockfile --ignore-scripts` succeeds across all 36
+workspaces with no regeneration or fallback. This was an existing dependency
+stage, not a clean-room lifecycle installation.
+
+CI run `34405038082` is **not green**: its last general-server shard exceeded
+the unchanged 20-minute job limit during cleanup. Its test step finished with
+**123 files / 2,972 tests passed**, plus five existing guards, in 1,144.21s;
+the chat suite passes **985/985** with no observed `40P01`. All other jobs,
+including all browser shards, types, release registry and workspace build,
+are green. Neither root nor the landing owner cancelled the job. The landing
+lane reproduced the missing duration measurement: the 985-case chat suite
+received a 1,307ms median estimate instead of its observed 645,354ms serial
+cost. One measured-weight entry makes the unchanged scheduler place it alone
+on an existing shard. The complete 603-file general partition and separate
+144-file serialized partition remain unchanged in coverage, with no deadline,
+algorithm or workflow changes. A genuine missing-entry regression fails before
+the fix; all **35/35** CI-script tests pass afterward, independently repeated
+by root. The resulting successor is **386 files**. Observed-cost replay
+predicts a longest shard of about 780s; that is an estimate, not a new CI pass.
+Passing assertions do not override the failed required CI gate.
+
+The user completed login to a separately staged, officially signed Telegram
+Desktop **7.2.7**. Its actual native UI is open to the verified QA bot. The
+original macOS Telegram app and its profile were not replaced or imported.
+Native draft Stop still awaits a real click and authenticated receipt. Ordinary
+agent replies generally edit the existing working message and do not take the
+new-draft path. One real **Send to channel** action saved a 2,791-character
+Board update on CHA-50 and published it once in 1.463s, with durable draft ID 3,
+no new run, and unchanged task/conversation state. The native observer started
+1.330s after publication had completed; it missed the opportunity and later
+lost window access. This is **not** a Stop pass or evidence that the client
+does not support Stop. No artificial stream delay, `/close`, or hidden provider
+call was used. Native availability/synchronized observation needs a bounded
+follow-up; the current gate remains explicitly unqualified.
+
+The earlier local qualification below remains valid for its identified bytes.
+The next head still needs fresh CI, exact-head Greptile 5/5 and actual human
+CODEOWNER approval. Live83 is unchanged, and Teams work-tenant installation
+remains unqualified.
+
+### Completed local qualification — September 9, 21:05 UTC
 
 The final process browser test now waits for the exact newly resumed child's
 real retryable cancellation delivery before asserting zero notifications and

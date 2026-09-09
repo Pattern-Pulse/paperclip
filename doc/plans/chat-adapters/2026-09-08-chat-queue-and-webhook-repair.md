@@ -7280,3 +7280,117 @@ are required; older-head green jobs or review do not satisfy them. Existing
 human CODEOWNER requests are not approvals. Live83, original lockfile
 `47a7c093…`, original runner `6279d39a…` and all provider accounts remain
 unchanged. No second chat merge or new live deployment is claimed.
+
+## Official lock refresh and measured CI allocation — September 9, 21:34 UTC
+
+The published integration head is `ed1b6a6eb9ed1c94c39c963f33912241387bcb79`,
+384 files. Its fresh exact-head Greptile review completed at 21:11:27 UTC with
+**4/5**, identifying the tracked lockfile's missing `smol-toml` resolution.
+The raw-head frozen-install inconsistency is real; the broader claim that CI
+cannot build overlooks the existing trusted workflow's downstream lock refresh.
+The review and its finding are preserved, not replaced by the previous head's
+5/5 result. Root requested exactly one review of ed1.
+
+Official master `7cf9a377964b295df8ed40d5e4392d06bcb44fdf` already merged the
+CI-generated lock refresh from `7c54d45a29be9d214b935beff41659a44557fe94`.
+The private merge `672366e0f5b04adcf844e1a6f2f2c78a52e045d6` has parents ed1
+and that exact master. Its only tree delta from ed1 is the official lock,
+SHA-256 `384784943b5a63fb7b351187c0f3dbb1e9f3e61f70e7bee3c435c302f8aedea6`;
+there is no lockfile change in the PR's three-dot diff. Actual pnpm 9.15.4 /
+Node 24.21 frozen installation with `--ignore-scripts` passes for all 36
+workspaces in one second, without fallback or regeneration. Existing staged
+dependencies were present; this does not establish a clean-room lifecycle
+bootstrap. Log: physical `integration-base-verify-YAhDBQ/official-lock-frozen-install-final.log`.
+Its complete tree matches the current CI merge tree `aed58114…`; the successor
+still requires its own exact-head checks after publication.
+
+CI run [34405038082](https://github.com/paperclipai/paperclip/actions/runs/34405038082)
+ended **cancelled**, with required `ci / verify` failed. Neither root nor the
+landing owner cancelled it. GitHub's annotation for general-server shard four,
+job `102646337040`, states that its 20-minute maximum elapsed. The test step
+itself finished successfully at 21:28:12 UTC: **123 files, 2,972 tests passed**,
+five existing guards, 1,144.21s total. Cleanup reached the job's 20-minute edge.
+The chat cohort passes **985/985**, 629.654s test time, with no observed `40P01`.
+These passing assertions do not make the job or full CI green. Its retained
+log is `ci-ed1-server4-job.log` in the landing runtime.
+
+All other jobs pass, including all three browser shards and `ci / e2e`,
+typechecks, release registry and workspace build. The build includes 38 Node
+contracts, 1,944 executed runner Vitest tests plus three existing benchmark
+guards, 538 top-level Rust tests plus two explicitly invoked helper checks,
+one conformance and 11 replay tests, and 870 API authority checks. The native
+process-composer Stop browser case passes in CI. None of these is Telegram's
+native client Stop test or a deployment of the new runner to Live83.
+
+The allocation defect is concrete: the general-server duration manifest lacked
+the new chat suite, so it received the median **1,307ms** weight. The actual
+first-suite serial cost is **645,354ms**, conservatively rounded from Vitest
+RUN at 21:09:07.5491992 to completion at 21:19:52.9026416. Adding that one measured
+entry lets the existing longest-processing-time scheduler reserve one existing
+shard for the chat suite. General shard counts change from 112/121/124/123/123
+to **1/144/151/154/153**. The exact union of all 603 general suites is preserved,
+without duplicates; all 144 serialized suites remain separate and unchanged.
+No scheduling algorithm, workflow, isolation rule, job limit or test timeout
+changes. Applying the new mapping to observed suite costs predicts
+645/518/780/564/608 seconds, an estimate that still needs fresh CI.
+
+The missing-measurement regression genuinely fails before the fix. The final
+CI-script cohort passes **35/35**, no skips, independently repeated by root in
+2.445s. Manifest SHA-256 is
+`3265d9749510c699f3314924be6240ffbb76f832bd52d09bd0fa3380fbe312bb`;
+test SHA-256 `3ca033f38774929f5c79c533e8bcadca3fe4f82aa3c82f1693ff92ba488b97d7`.
+The full mapping ledger is physical `integration-base-verify-YAhDBQ/chat-duration-shard-ledger.json`.
+These two existing script paths increase the integration PR to **386 files**,
+still below 500. They and the official lock merge will join the updated
+qualification documents in one successor, followed by fresh CI and one fresh
+exact-head Greptile review. Actual human CODEOWNER approval remains required.
+
+## Native Telegram client login and bounded draft journey — September 9
+
+The previously installed macOS Telegram app is the separate Swift client,
+bundle `ru.keepcoder.Telegram`; its profile and installation are unchanged.
+For this native-only journey, official Telegram Desktop **7.2.7** was staged
+separately with its own private profile. The release DMG's SHA-256 is
+`7957739d238f466c131c0eca7e05bf3ba188c440380921e250caf5a437f21e8e`, matching
+the official release digest. The app's deep/strict signature passes and Gatekeeper
+accepts its notarized Telegram FZ-LLC Developer ID, team `C67CF9S4VU`. No
+quarantine bypass, profile import or notification/contact grant was used.
+The user completed the QR login, and natural search plus the visible profile
+verified the exact QA bot username. No unrelated device alert was confirmed.
+
+Source review establishes the acceptance boundary: ordinary first agent replies
+typically edit the same run's working/queued message and intentionally bypass
+native drafts. A new text-only explicit Board publication in a private chat,
+over 280 characters but fitting one provider message, is the natural eligible
+journey. The SDK's 250ms update throttle is not a guaranteed Stop-button dwell;
+already-approved text is emitted without simulated generation delays. Native
+Stop affects that presentation only, not the saved answer or the agent's task.
+The current Live83 startup-resolved adapter contains the durable draft patch,
+and the exact endpoint's current generation-two Stop subscription is confirmed.
+This is source/startup-resolution evidence, not a live heap-inspection claim.
+
+Root followed the real Board UI from the existing task's **Connection** link
+to **Conversations**, opened active CHA-50 and expanded **Send to channel**.
+The destination, explicit-send copy and staged text were visually inspected.
+The 2,791-character synthetic plain update contained no attachments, task
+request or private data. The actual send click occurred at 21:32:50.995 UTC.
+Publication `9485a2e9-2643-4c01-8539-9ab0a5de2f58` was created at 21:32:51.220
+and published at 21:32:52.683, attempt one, provider message `417200359:197`.
+It saved comment `9134d24e-c961-4236-a256-6a7f9faa1089`. Durable draft action
+`237b332d-ef88-486d-a883-ed11cd2a8822` bound draft **3** to that publication,
+attempt, bot, chat, runtime generation two, session generation 16 and text
+hash, and settled as published. There was no replacement message, new run or
+incoming Stop delivery. The exact existing task remains in progress and its
+conversation active. Root inspected the saved Board message and cleared send
+form after completion; paragraph structure and the ending marker are visible.
+
+The native observation actually began at **21:32:54.013 UTC**, 1.330s after
+publication completed, despite the earlier coordination message. No Stop was
+observed or clicked. Later native access returned `noWindowsAvailable`; no
+usable final native screenshot was retained. Thus functional Board-to-provider
+delivery has a durable receipt and saved Board rendering, but the final native
+rendering and native Stop interaction are **unverified** for this attempt.
+It is a missed observation window, not proof of an unsupported client or a
+successful cancellation. The next bounded check must confirm native window
+availability and start observation before the send in one synchronized
+interaction. No artificial producer delay or repeated blind sends are justified.
