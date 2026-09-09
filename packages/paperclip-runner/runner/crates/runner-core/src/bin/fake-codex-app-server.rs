@@ -1263,7 +1263,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         }))?;
                     }
                     if emit_post_completion_passive_statuses {
+                        if let Some(gate) = post_completion_notification_gate.as_ref() {
+                            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                            while !gate.is_file() {
+                                if std::time::Instant::now() >= deadline {
+                                    return Err(
+                                        "post-completion notification gate timed out".into()
+                                    );
+                                }
+                                thread::sleep(Duration::from_millis(1));
+                            }
+                        }
                         for notification in [
+                            json!({
+                                "method": "deprecationNotice",
+                                "params": {"summary": "A provider setting is deprecated", "details": null}
+                            }),
                             json!({
                                 "method": "remoteControl/status/changed",
                                 "params": {"status": "disabled", "environmentId": null}
@@ -1294,6 +1309,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             }),
                         ] {
                             send(notification)?;
+                        }
+                        if let Some(gate) = post_completion_notification_gate.as_ref() {
+                            fs::write(gate.with_extension("emitted"), b"emitted")?;
                         }
                     }
                     if emit_post_completion_foreign_turn {

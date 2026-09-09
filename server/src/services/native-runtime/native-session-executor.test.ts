@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   access,
+  chmod,
+  lstat,
   appendFile,
   mkdir,
   mkdtemp,
@@ -204,6 +206,7 @@ import {
   semanticProviderPlanMarkdown,
   sha256DirectoryTree,
   stageRemoteRunnerDirectory,
+  stageRemoteRunnerFile,
   steerNativeSession,
   syncRemoteRunnerDirectoryOut,
   verifyNativeHarnessBackup,
@@ -1556,6 +1559,79 @@ describe("remote provider checkpoint snapshots", () => {
   });
 });
 
+describe("atomic remote runner replacement", () => {
+  for (const useSyncIn of [true, false]) {
+    it(`replaces an old launcher symlink without writing through it (${useSyncIn ? "provider" : "shell"})`, async () => {
+      const root = await mkdtemp(join(tmpdir(), "runner-replace-"));
+      try {
+        const sourcePath = join(root, "new runner's bytes");
+        const imageBinary = join(root, "image-runner");
+        const targetPath = join(root, "paperclip-runnerd");
+        await writeFile(sourcePath, "fixed runner");
+        await writeFile(imageBinary, "old image runner");
+        await symlink(imageBinary, targetPath);
+        const runner = {
+          execute: async (command: { command: string; args?: string[]; stdin?: string }) => {
+            const stdout = execFileSync(command.command, command.args ?? [], { input: command.stdin, encoding: "utf8" });
+            return { exitCode: 0, stdout, stderr: "" };
+          },
+          ...(useSyncIn ? { syncIn: async (operations: Array<{ files: Array<{ sourcePath: string; targetPath: string; mode: number }> }>) => {
+            const file = operations[0]!.files[0]!;
+            expect(file.targetPath).not.toBe(targetPath);
+            await writeFile(file.targetPath, await readFile(file.sourcePath));
+            await chmod(file.targetPath, file.mode);
+          } } : {}),
+        };
+        await stageRemoteRunnerFile({ target: {} as never, runner: runner as never, sourcePath, targetPath, mode: 0o755 });
+        expect(await readFile(targetPath, "utf8")).toBe("fixed runner");
+        expect((await lstat(targetPath)).isSymbolicLink()).toBe(false);
+        expect((await lstat(targetPath)).mode & 0o777).toBe(0o755);
+        expect(await readFile(imageBinary, "utf8")).toBe("old image runner");
+        expect((await readdir(root)).filter(name => name.includes(".upload-"))).toEqual([]);
+      } finally { await rm(root, { recursive: true, force: true }); }
+    });
+  }
+
+  it("retains the existing launcher when a provider upload is interrupted", async () => {
+    const root = await mkdtemp(join(tmpdir(), "runner-interrupted-"));
+    try {
+      const targetPath = join(root, "paperclip-runnerd");
+      await writeFile(targetPath, "recoverable old runner");
+      const runner = {
+        syncIn: async (operations: Array<{ files: Array<{ targetPath: string }> }>) => {
+          await writeFile(operations[0]!.files[0]!.targetPath, "partial upload");
+          throw new Error("upload interrupted");
+        },
+        execute: async (command: { command: string; args?: string[] }) => {
+          execFileSync(command.command, command.args ?? []);
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      };
+      await expect(stageRemoteRunnerFile({ target: {} as never, runner: runner as never, sourcePath: "unused", targetPath, mode: 0o755 })).rejects.toThrow("upload interrupted");
+      expect(await readFile(targetPath, "utf8")).toBe("recoverable old runner");
+      expect(await readdir(root)).toEqual(["paperclip-runnerd"]);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("does not publish through a launcher symlink to a directory", async () => {
+    const root = await mkdtemp(join(tmpdir(), "runner-directory-link-"));
+    try {
+      const directory = join(root, "unrelated");
+      const targetPath = join(root, "paperclip-runnerd");
+      const sourcePath = join(root, "candidate");
+      await mkdir(directory); await symlink(directory, targetPath); await writeFile(sourcePath, "runner");
+      const runner = { execute: async (command: { command: string; args?: string[]; stdin?: string }) => {
+        try { execFileSync(command.command, command.args ?? [], { input: command.stdin }); return { exitCode: 0, stdout: "", stderr: "" }; }
+        catch { return { exitCode: 1, stdout: "", stderr: "failed" }; }
+      } };
+      await expect(stageRemoteRunnerFile({ target: {} as never, runner: runner as never, sourcePath, targetPath, mode: 0o755 })).rejects.toThrow("runner_remote_staging_failed");
+      expect(await readdir(directory)).toEqual([]);
+      expect((await lstat(targetPath)).isSymbolicLink()).toBe(true);
+      expect((await readdir(root)).filter(name => name.includes(".upload-"))).toEqual([]);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+});
+
 describe("remote provider checkpoint restores", () => {
   it("does not upload excluded Codex scratch trees or credentials", async () => {
     const sourcePath = await mkdtemp(
@@ -1709,6 +1785,7 @@ describe("remote runner build metadata", () => {
     binaryName: "paperclip-runnerd",
     packageName: "@paperclipai/paperclip-runner",
     binaryContractVersion: 2,
+    capabilities: ["codex.warm-attachment.passive-notices.v1"],
     prpTransportModes: ["dial_ws_loopback", "dial_wss", "listen_ws"],
   };
 
@@ -1728,6 +1805,13 @@ describe("remote runner build metadata", () => {
         "listen_ws",
       ),
     ).toThrow("runner_remote_artifact_contract_incompatible");
+  });
+
+  it("rejects preinstalled binaries that lack safe passive-notice attachment", () => {
+    for (const capabilities of [undefined, [], ["unrelated"]]) {
+      expect(() => assertRemoteRunnerBuildMetadata({ ...current, capabilities }, "listen_ws"))
+        .toThrow("runner_remote_capability_missing:codex.warm-attachment.passive-notices.v1");
+    }
   });
 
   it("requires the selected transport without falling through", () => {
@@ -6282,6 +6366,7 @@ describe("runnerd provider runtime wiring", () => {
             binaryName: "paperclip-runnerd",
             packageName: "@paperclipai/paperclip-runner",
             binaryContractVersion: 2,
+            capabilities: ["codex.warm-attachment.passive-notices.v1"],
             prpTransportModes: ["listen_ws"],
           });
         } else if (command.args?.[0] === "--version") {

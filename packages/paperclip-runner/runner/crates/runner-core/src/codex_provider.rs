@@ -931,6 +931,7 @@ impl CodexProvider {
                     let safe_tail_method = matches!(
                         method.as_str(),
                         "warning"
+                            | "deprecationNotice"
                             | "configWarning"
                             | "remoteControl/status/changed"
                             | "mcpServer/startupStatus/updated"

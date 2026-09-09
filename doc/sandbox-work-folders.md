@@ -340,3 +340,13 @@ process and turn before the controller can interrupt it. This matches the
 semantic-tool response path. A shutdown interruption must preserve that exact
 completed-turn authority so the session can be suspended and checkpointed.
 Invalid results and conflicting identities still fail validation.
+
+Warm native Codex attachment drains bounded informational deprecation notices
+that arrive after the prior turn and its readiness probe. Notices naming another
+turn, new work, and provider requests still block attachment.
+
+The app checks the runner’s passive-notice capability before reusing an image
+binary. An older binary is replaced with the app’s compatible artifact through
+a temporary file and atomic rename, preserving image symlink targets and the
+previous launcher on interrupted uploads. The durable checkpoint contract stays
+at version 2 so existing native session backups remain restorable.

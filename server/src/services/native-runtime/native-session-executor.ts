@@ -5342,6 +5342,17 @@ export function assertRemoteRunnerBuildMetadata(
   ) {
     throw new Error("runner_remote_artifact_contract_incompatible");
   }
+  // An older image may implement the same durable protocol but still reject
+  // passive Codex notices during warm attachment. Stage the current artifact
+  // without changing the checkpoint contract or replacing the sandbox.
+  if (
+    !Array.isArray(metadata.capabilities) ||
+    !metadata.capabilities.includes("codex.warm-attachment.passive-notices.v1")
+  ) {
+    throw new Error(
+      "runner_remote_capability_missing:codex.warm-attachment.passive-notices.v1",
+    );
+  }
   const modes = Array.isArray(metadata.prpTransportModes)
     ? metadata.prpTransportModes
     : [];
@@ -5352,7 +5363,7 @@ export function assertRemoteRunnerBuildMetadata(
   }
 }
 
-async function stageRemoteRunnerFile(input: {
+export async function stageRemoteRunnerFile(input: {
   target: Extract<AdapterExecutionTarget, { kind: "remote" }>;
   runner: CommandManagedRuntimeRunner;
   sourcePath: string;
@@ -5360,36 +5371,59 @@ async function stageRemoteRunnerFile(input: {
   mode: number;
 }): Promise<void> {
   const runner = input.runner;
-  if (runner.syncIn) {
-    await runner.syncIn([
-      {
-        operationId: `runner-stage-${randomUUID()}`,
-        files: [
-          {
+  // The old launcher can be a symlink into the sandbox image. Publish a new
+  // file atomically instead of following that link or truncating working bytes.
+  const temporaryPath = `${input.targetPath}.upload-${randomUUID()}`;
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  try {
+    if (runner.syncIn) {
+      await runner.syncIn([
+        {
+          operationId: `runner-stage-${randomUUID()}`,
+          files: [{
             sourcePath: input.sourcePath,
-            targetPath: input.targetPath,
+            targetPath: temporaryPath,
             kind: "file",
             mode: input.mode,
-          },
-        ],
-      },
-    ]);
-    return;
-  }
-  const bytes = readFileSync(input.sourcePath);
-  const directory = posix.dirname(input.targetPath);
-  const script =
-    `umask 077; mkdir -p '${directory.replaceAll("'", "'\\''")}' && ` +
-    `base64 -d > '${input.targetPath.replaceAll("'", "'\\''")}' && ` +
-    `chmod ${input.mode.toString(8)} '${input.targetPath.replaceAll("'", "'\\''")}'`;
-  const result = await runner.execute({
-    command: "sh",
-    args: ["-c", script],
-    stdin: bytes.toString("base64"),
-    bypassSession: true,
-  });
-  if (result.exitCode !== 0 || result.timedOut) {
-    throw new Error("runner_remote_staging_failed");
+          }],
+        },
+      ]);
+    } else {
+      const bytes = readFileSync(input.sourcePath);
+      const result = await runner.execute({
+        command: "sh",
+        args: ["-c", [
+          `umask 077; mkdir -p ${quote(posix.dirname(input.targetPath))}`,
+          `base64 -d > ${quote(temporaryPath)}`,
+          `chmod ${input.mode.toString(8)} ${quote(temporaryPath)}`,
+        ].join(" && ")],
+        stdin: bytes.toString("base64"),
+        bypassSession: true,
+      });
+      if (result.exitCode !== 0 || result.timedOut) {
+        throw new Error("runner_remote_staging_failed");
+      }
+    }
+    const published = await runner.execute({
+      command: "sh",
+      args: ["-c", [
+        `test -f ${quote(temporaryPath)}`,
+        `test ! -L ${quote(temporaryPath)}`,
+        `test ! -d ${quote(input.targetPath)}`,
+        `mv -f -- ${quote(temporaryPath)} ${quote(input.targetPath)}`,
+      ].join(" && ")],
+      bypassSession: true,
+    });
+    if (published.exitCode !== 0 || published.timedOut) {
+      throw new Error("runner_remote_staging_failed");
+    }
+  } catch (error) {
+    await runner.execute({
+      command: "sh",
+      args: ["-c", `rm -f -- ${quote(temporaryPath)}`],
+      bypassSession: true,
+    }).catch(() => undefined);
+    throw error;
   }
 }
 
