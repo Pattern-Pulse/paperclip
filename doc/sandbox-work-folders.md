@@ -71,6 +71,11 @@ startup recovers the retained workspace from the matching task, project, agent,
 responsible user, and sandbox environment. Local execution, explicit workspace
 choices, and tasks that have entered scoped persistence do not use this fallback.
 The normal workspace freshness and provider identity checks still apply.
+After a validated legacy resume, both runner generations adopt the existing
+sandbox working copy without uploading a replacement Git directory or host
+overlay. This preserves its index and repository-local state. The legacy
+outbound merge still saves working files to the host. A missing native sync
+stamp on a pre-change lease does not make the host copy authoritative.
 
 Acceptance must resume representative pre-upgrade legacy and native tasks with
 committed, staged, unstaged, and untracked work, verify their original paths and
@@ -93,6 +98,10 @@ inside ES-module repositories can still execute Git and GitHub CLI commands. Nat
 through both runnerd’s Rust sidecar filter and the ACPX JavaScript launch filter,
 including the explicitly controller-projected GitHub broker environment. ACPX does not inherit ambient host GitHub credentials or
 shell startup hooks. CLI configuration remains in its private runtime directories.
+Native OpenCode preserves the same explicit GitHub binding through both its
+runner proxy and provider process. It does not inherit repository credentials
+or shell startup hooks from the host; provider diagnostics redact the projected
+capabilities and credential configuration values.
 Warm sandbox task bindings persist independently of the experimental isolated
 workspace setting. Only the active host run can establish that binding; the
 setting still controls user-configurable worktree operations.
@@ -310,3 +319,11 @@ The configured origin, commit identity, artifact integrity, migration coverage,
 dependency lockfile and tenant readiness are checked before acceptance. Preview
 artifacts cannot become the fleet default. Record both the build workflow and
 the resulting object identities with the acceptance evidence.
+
+On graceful app shutdown, idle native sandbox sessions are parked and checkpointed
+before application services and the database close. The drain runs with bounded
+concurrency and a 30-second deadline; failed or timed-out checkpoints are logged
+as incomplete. Active native turns keep their existing restart/reattach behavior.
+Local and SSH session shutdown behavior is unchanged. A hard process kill cannot
+guarantee a provider-session checkpoint; scoped files and repository durability
+remain limited to the last successfully published work-folder checkpoint.

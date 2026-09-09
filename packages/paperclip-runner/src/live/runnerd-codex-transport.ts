@@ -1,4 +1,5 @@
 import { externalWorkFolderEnvironment } from "../work-folder-environment.js";
+import { githubCredentialEnvironment } from "../github-credential-environment.js";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -1901,7 +1902,7 @@ function createSanitizedOpenCodeRunnerEnvironment(
   source: NodeJS.ProcessEnv | undefined,
 ): NodeJS.ProcessEnv {
   const candidate = { ...process.env, ...source };
-  return Object.fromEntries(
+  const environment = Object.fromEntries(
     Object.entries(candidate).filter(
       ([key, value]) =>
         typeof value === "string" &&
@@ -1909,6 +1910,9 @@ function createSanitizedOpenCodeRunnerEnvironment(
           /^LC_[A-Z0-9_]{1,32}$/.test(key)),
     ),
   );
+  // Repository access comes only from the explicit controller projection,
+  // never from credentials or shell hooks in the runner host's environment.
+  return { ...environment, ...(source ? githubCredentialEnvironment(source) : {}) };
 }
 
 export function resolveSourceCodexHome(

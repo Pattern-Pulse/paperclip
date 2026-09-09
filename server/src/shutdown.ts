@@ -52,12 +52,40 @@ export async function drainRunExecutionFinalizersForShutdown(input: {
 export async function finalizeServerShutdown(input: {
   signal: "SIGINT" | "SIGTERM";
   shutdownAppServices: (() => Promise<void>) | undefined;
+  closeIdleSandboxSessions?: () => Promise<{ closed: number; busy: number; failed: number }>;
+  sandboxSessionTimeoutMs?: number;
   stopEmbeddedPostgres: (() => Promise<void>) | null;
   shutdownInstrumentation: () => Promise<void>;
   shutdownSentry: () => Promise<void>;
   log: ShutdownLogger;
 }): Promise<void> {
   const { signal } = input;
+
+  if (input.closeIdleSandboxSessions) {
+    let timer: NodeJS.Timeout | null = null;
+    const timeoutMs = input.sandboxSessionTimeoutMs ?? 30_000;
+    try {
+      const result = await Promise.race([
+        input.closeIdleSandboxSessions(),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+          timer.unref?.();
+        }),
+      ]);
+      if (result === null || result.failed > 0) {
+        input.log.error(
+          { signal, timeoutMs, result },
+          "Idle sandbox native session checkpoint incomplete during shutdown",
+        );
+      } else {
+        input.log.info({ signal, result }, "Idle sandbox native sessions parked for shutdown");
+      }
+    } catch (err) {
+      input.log.error({ signal, err }, "Idle sandbox native session shutdown failed");
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
 
   // Await the application service cleanup, so a live setup-token login session
   // releases its sandbox lease before the database and the provider stop. A

@@ -272,6 +272,7 @@ type WarmNativeSession = {
   configDigest: string;
   companyId: string;
   environmentId: string | null;
+  sandbox: boolean;
   busy: boolean;
   idleTimer: ReturnType<typeof setTimeout> | null;
   lastActivityAt: string;
@@ -313,6 +314,37 @@ export async function closeWarmNativeSessionsForEnvironment(input: {
     }
   }
   return { closed, busy, failed };
+}
+
+/** Park idle sandbox sessions while their host still has database and transport
+ * access. Active turns retain their existing restart/reattach contract. */
+export async function closeIdleSandboxNativeSessionsForShutdown(input: {
+  reason: string;
+}): Promise<{ closed: number; busy: number; failed: number }> {
+  const result = { closed: 0, busy: 0, failed: 0 };
+  const pending: WarmNativeSession[] = [];
+  for (const [sessionId, entry] of warmNativeSessions) {
+    if (!entry.sandbox) continue;
+    if (entry.busy) {
+      result.busy += 1;
+      continue;
+    }
+    if (entry.idleTimer !== null) clearTimeout(entry.idleTimer);
+    // Fence every selected owner before the first asynchronous close.
+    warmNativeSessions.delete(sessionId);
+    pending.push(entry);
+  }
+  await Promise.all(Array.from({ length: Math.min(4, pending.length) }, async () => {
+    for (let entry = pending.shift(); entry; entry = pending.shift()) {
+      try {
+        await entry.session.close({ reason: input.reason });
+        result.closed += 1;
+      } catch {
+        result.failed += 1;
+      }
+    }
+  }));
+  return result;
 }
 
 function readBoundedNativeFile(
@@ -4528,6 +4560,9 @@ async function executePaperclipNativeSessionWithinScope(
                     companyId: input.execution.binding.companyId,
                     environmentId:
                       input.runnerExecutionTarget?.environmentId ?? null,
+                    sandbox:
+                      input.runnerExecutionTarget?.kind === "remote" &&
+                      input.runnerExecutionTarget.transport === "sandbox",
                     busy: true,
                     idleTimer: null,
                     lastActivityAt: new Date().toISOString(),

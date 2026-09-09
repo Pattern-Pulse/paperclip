@@ -171,6 +171,7 @@ import {
   buildNativeHarnessBackupManifest,
   cancelNativeSession,
   closeWarmNativeSessionsForEnvironment,
+  closeIdleSandboxNativeSessionsForShutdown,
   createGovernedWaitEventObservation,
   createRemoteRunnerProcessLauncher,
   createRunnerdBackend,
@@ -3073,6 +3074,73 @@ describe("native session same-turn steering", () => {
 });
 
 describe("native warm session supervision", () => {
+  it.each([
+    { transport: "sandbox", busy: false, fail: false },
+    { transport: "sandbox", busy: true, fail: false },
+    { transport: "sandbox", busy: false, fail: true },
+    { transport: "ssh", busy: false, fail: false },
+    { transport: "local", busy: false, fail: false },
+  ] as const)("shutdown parks only idle sandbox sessions: $transport busy=$busy fail=$fail", async ({ transport, busy, fail }) => {
+    const id = `shutdown-${transport}-${busy}-${fail}`;
+    const close = vi.fn(async () => {
+      if (fail) throw new Error("checkpoint unavailable");
+    });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const warmExecution = {
+      ...execution,
+      binding: { ...execution.binding, runId: id, executionWorkspaceId: id },
+      session: {
+        ...execution.session,
+        normalizedSessionId: id,
+        lifecyclePolicy: { mode: "warm" as const, idleTimeoutMs: 100 },
+      },
+    } as NativeExecutionInputV1;
+    state.execute.mockReset().mockImplementationOnce(async (options) => {
+      options.onSession?.({ close });
+      if (busy) await held;
+      return {
+        result: { summary: "completed" },
+        terminal: { runTerminalState: "succeeded" },
+        turnId: id, normalizedSessionId: id, providerSessionId: id,
+        driverKind: "test", driverVersion: "1", nativeEventCount: 1,
+        highestContiguousSourceSeq: 1, usage: null,
+      };
+    });
+    const running = executePaperclipNativeSession({
+      db: leaseDb(warmExecution), execution: warmExecution, runnerInstanceId: id,
+      runnerExecutionTarget: transport === "local" ? undefined : transport === "sandbox" ? {
+        kind: "remote", transport: "sandbox", environmentId: id, remoteCwd: `/tmp/${id}`,
+      } : {
+        kind: "remote", transport: "ssh", environmentId: id, remoteCwd: `/tmp/${id}`,
+        spec: {
+          host: "runner.internal", port: 22, username: "runner",
+          remoteWorkspacePath: `/tmp/${id}`, remoteCwd: `/tmp/${id}`,
+          privateKey: null, knownHosts: null, strictHostKeyChecking: true,
+        },
+      },
+    });
+    await vi.waitFor(() => expect(state.execute).toHaveBeenCalledOnce());
+    if (!busy) await running;
+    try {
+      const result = await closeIdleSandboxNativeSessionsForShutdown({ reason: "server shutdown" });
+      if (transport === "sandbox" && !busy) {
+        expect(close).toHaveBeenCalledExactlyOnceWith({ reason: "server shutdown" });
+        expect(result[fail ? "failed" : "closed"]).toBeGreaterThanOrEqual(1);
+        await closeIdleSandboxNativeSessionsForShutdown({ reason: "duplicate shutdown" });
+        expect(close).toHaveBeenCalledOnce();
+      } else {
+        expect(close).not.toHaveBeenCalled();
+        if (busy) expect(result.busy).toBeGreaterThanOrEqual(1);
+      }
+    } finally {
+      release();
+      await running;
+      // Unselected sessions retain their existing idle-close behavior.
+      await vi.waitFor(() => expect(close).toHaveBeenCalled(), { timeout: 1_000 });
+    }
+  });
+
   it("closes an idle warm session before its remote environment is destroyed", async () => {
     const close = vi.fn(async () => undefined);
     const warmExecution = {
