@@ -1453,6 +1453,7 @@ export function environmentService(db: Db) {
                 const retired = await tx
                   .update(environmentLeases)
                   .set({
+                    metadata: sql`coalesce(${environmentLeases.metadata}, '{}'::jsonb) || ${JSON.stringify({ reusableLeaseReplacedByRunId: input.heartbeatRunId })}::jsonb`,
                     status: "expired",
                     releasedAt: now,
                     lastUsedAt: now,
@@ -1462,6 +1463,8 @@ export function environmentService(db: Db) {
                   .where(
                     and(
                       eq(environmentLeases.id, input.replacesReusableLeaseId),
+                      sql`not (coalesce(${environmentLeases.metadata}, '{}'::jsonb) ? 'sandboxReleasePending')`,
+                      sql`not (coalesce(${environmentLeases.metadata}, '{}'::jsonb) ? 'reusableLeaseReplacedByRunId')`,
                       eq(environmentLeases.companyId, input.companyId),
                       eq(environmentLeases.environmentId, input.environmentId),
                       eq(
@@ -1503,6 +1506,8 @@ export function environmentService(db: Db) {
                   .where(
                     and(
                       eq(environmentLeases.id, input.reusesReusableLeaseId),
+                      sql`not (coalesce(${environmentLeases.metadata}, '{}'::jsonb) ? 'sandboxReleasePending')`,
+                      sql`not (coalesce(${environmentLeases.metadata}, '{}'::jsonb) ? 'reusableLeaseReplacedByRunId')`,
                       eq(environmentLeases.companyId, input.companyId),
                       eq(environmentLeases.environmentId, input.environmentId),
                       eq(
@@ -1550,6 +1555,38 @@ export function environmentService(db: Db) {
         throw new Error("Failed to acquire environment lease");
       }
       return toEnvironmentLease(row);
+    },
+
+    /** One terminal release owns provider access; no transaction spans its RPC. */
+    claimRunLeaseRelease: async (input: { id: string; companyId: string; heartbeatRunId: string; providerLeaseId: string | null }) => {
+      const token = randomUUID();
+      const claim = { token, runId: input.heartbeatRunId, startedAt: new Date().toISOString() };
+      const [row] = await db.update(environmentLeases).set({
+        metadata: sql`coalesce(${environmentLeases.metadata}, '{}'::jsonb) || ${JSON.stringify({ sandboxReleasePending: claim })}::jsonb`,
+        updatedAt: new Date(),
+      }).where(and(
+        eq(environmentLeases.id, input.id), eq(environmentLeases.companyId, input.companyId),
+        eq(environmentLeases.heartbeatRunId, input.heartbeatRunId), eq(environmentLeases.status, "active"),
+        sql`${environmentLeases.providerLeaseId} is not distinct from ${input.providerLeaseId}`,
+        sql`not (coalesce(${environmentLeases.metadata}, '{}'::jsonb) ? 'sandboxReleasePending')`,
+        sql`not (coalesce(${environmentLeases.metadata}, '{}'::jsonb) ? 'reusableLeaseReplacedByRunId')`,
+      )).returning();
+      return row ? { token, lease: toEnvironmentLease(row) } : null;
+    },
+
+    finishRunLeaseRelease: async (input: { id: string; companyId: string; token: string; confirmed: boolean }) => {
+      const [row] = await db.update(environmentLeases).set(input.confirmed ? {
+        metadata: sql`${environmentLeases.metadata} - 'sandboxReleasePending'`, updatedAt: new Date(),
+      } : {
+        // A timeout or crashed owner is not permission to stop/resume again.
+        // Keep the claim until explicit recovery proves the provider settled.
+        status: "retained", expiresAt: null, releasedAt: null, cleanupStatus: "failed",
+        failureReason: "sandbox_release_recovery_required", updatedAt: new Date(),
+      }).where(and(
+        eq(environmentLeases.id, input.id), eq(environmentLeases.companyId, input.companyId),
+        sql`${environmentLeases.metadata}->'sandboxReleasePending'->>'token' = ${input.token}`,
+      )).returning();
+      return row ? toEnvironmentLease(row) : null;
     },
 
     releaseLease: async (
@@ -1660,7 +1697,11 @@ export function environmentService(db: Db) {
       const row = await db
         .update(environmentLeases)
         .set({
-          metadata,
+          // Late provider metadata snapshots cannot erase host lifecycle fences.
+          metadata: sql`case when ${metadata === null} and not (coalesce(${environmentLeases.metadata}, '{}'::jsonb) ?| array['sandboxReleasePending','reusableLeaseReplacedByRunId']) then null else
+            (${JSON.stringify(metadata ?? {})}::jsonb - 'sandboxReleasePending' - 'reusableLeaseReplacedByRunId')
+            || case when ${environmentLeases.metadata} ? 'sandboxReleasePending' then jsonb_build_object('sandboxReleasePending', ${environmentLeases.metadata}->'sandboxReleasePending') else '{}'::jsonb end
+            || case when ${environmentLeases.metadata} ? 'reusableLeaseReplacedByRunId' then jsonb_build_object('reusableLeaseReplacedByRunId', ${environmentLeases.metadata}->'reusableLeaseReplacedByRunId') else '{}'::jsonb end end`,
           lastUsedAt: new Date(),
           updatedAt: new Date(),
         })

@@ -1776,6 +1776,21 @@ export function providerResourceDispositionForTerminalRun(
   return status === "succeeded" ? desired : "stop_and_retain";
 }
 
+/** The selected lease policy is durable even when scoped work folders replace copy-back. */
+export function readNativeProviderResourceDisposition(value: unknown): ProviderResourceDisposition | undefined {
+  return value === "keep_running" || value === "stop_and_retain" || value === "destroy" ? value : undefined;
+}
+
+export function recoveredNativeProviderResourceDisposition(
+  profile: Record<string, unknown>, status: string | null | undefined, workspaceSucceeded: boolean,
+): ProviderResourceDisposition {
+  if (!workspaceSucceeded) return "stop_and_retain";
+  const desired = readNativeProviderResourceDisposition(profile.nativeProviderResourceDisposition)
+    ?? readNativeWorkspaceSyncReference(profile.nativeWorkspaceSync)?.resourceDisposition
+    ?? "stop_and_retain";
+  return providerResourceDispositionForTerminalRun(desired, status) ?? "stop_and_retain";
+}
+
 export interface NativeSandboxLifecycle {
   runnerProcess: "per_turn" | "warm";
   sandboxResource: "keep_running" | "stop_and_reuse" | "destroy_after_turn";
@@ -17026,18 +17041,16 @@ export function heartbeatService(
     succeeded: boolean;
   }) {
     const settledRun = await getRun(input.runId);
-    const workspaceSyncReference = readNativeWorkspaceSyncReference(
-      parseObject(settledRun?.runnerProfileJson).nativeWorkspaceSync,
-    );
+
     await releaseEnvironmentLeasesForRun({
       runId: input.runId,
       companyId: input.companyId,
       agentId: input.agentId,
       status: settledRun?.status,
       failureReason: settledRun?.error ?? undefined,
-      providerResourceDisposition: input.succeeded
-        ? (workspaceSyncReference?.resourceDisposition ?? "stop_and_retain")
-        : "stop_and_retain",
+      providerResourceDisposition: recoveredNativeProviderResourceDisposition(
+        parseObject(settledRun?.runnerProfileJson), settledRun?.status, input.succeeded,
+      ),
     });
     await releaseRuntimeServicesForRun(input.runId).catch(() => undefined);
     await finalizeAgentStatus(
@@ -20980,6 +20993,9 @@ export function heartbeatService(
               throw new Error("native_runtime_mode_conflict");
             }
             const lockedProfile = parseObject(lockedRun.runnerProfileJson);
+            providerResourceDispositionForRun = readNativeProviderResourceDisposition(lockedProfile.nativeProviderResourceDisposition)
+              ?? providerResourceDispositionForRun;
+            const persistedResourceDisposition = providerResourceDispositionForRun;
             await measureSandboxOperation("heartbeat.tx.update.set.where", { operationIndex: 124 }, async () => (tx
               .update(heartbeatRuns)
               .set({
@@ -20994,6 +21010,7 @@ export function heartbeatService(
                 runnerProfileJson: {
                   ...nativeRuntimeResolution.profile,
                   ...lockedProfile,
+                  ...(persistedResourceDisposition ? { nativeProviderResourceDisposition: persistedResourceDisposition } : {}),
                   ...(providerTraceRequested
                     ? {
                         providerTrace: {
