@@ -6921,3 +6921,252 @@ The landing owner will append this documentation, publish once, and require
 fresh exact-head full CI and Greptile 5/5. Existing CODEOWNER requests are not
 treated as approvals. No second chat merge or live deployment is claimed.
 Original lockfile `47a7c093…` and staged runner `6279d39a…` remain unchanged.
+
+### September 9, 20:29 UTC — CI exposes a genuine visible-task notification defect
+
+Integration head `89270d75fab79a7ffe6bda19e826fab26d4ec169` has a fresh
+Greptile **5/5** summary updated at 20:17:40 UTC. Root requested exactly one
+re-review at 20:15:06 after verifying that no review was queued or running.
+That review does not override the failed browser check in fresh CI run
+`34399838600`, job `102628990333`. The process composer Stop journey reaches
+cancelled parent/child runs, dead process PIDs, a paused subtree and an
+unaffected unrelated running task, then fails its unchanged zero-notification
+assertion. The screenshot shows the redundant informational parent-run
+cancellation toast. The later archived-company toast is teardown output, not
+the original one-toast failure. No websocket trace was uploaded by that job,
+so exact packet attribution is inferred from source and causal reproduction.
+
+The visible route uses the task identifier, whereas IssueDetail fetches linked
+run history under the canonical UUID. The resolver learned both aliases but
+read run caches using only the route identifier. A rich terminal event correctly
+suppressed its toast and evicted company live membership. The retryable terminal
+delivery intentionally lacks issueId; it then missed durable UUID-keyed history.
+A mounted actual-provider/socket regression against exact 892 production fails
+with one bodyless informational cancellation toast: one failed, nine unselected,
+921ms total. This establishes a UI product bug, not a flaky assertion.
+
+After the root-alias fix, a separate ordered child regression also fails: rich
+child cancellation suppresses, live membership is evicted, refreshed descendant
+data clears executionRunId, canonical linked history remains, and the no-issueId
+retry produces the same incorrect toast. That RED uses exact root-only production
+`fd247c75170d9a3dfbba9637c7f61b37d131f74f98864183950e2464f580676b`:
+one failed, 15 unselected, 1.00s total. It is separately reproduced, not claimed
+to be the particular parent toast observed in CI.
+
+The final two-file fix reads active/live/linked run caches through known root
+aliases and id/identifier pairs of current exact company/root descendants. Child
+IDs contribute only to subtree notification membership, not root invalidation.
+No global cache scan, same-agent run inference, persistent suppression registry,
+browser assertion relaxation or deadline increase was introduced. Controls retain
+notifications for explicit unrelated tasks, unrelated same-agent runs, background
+pages, and children removed from the subtree despite their retained cached history.
+
+Final production SHA-256:
+`9c3621eb72f173388f9c05ea7e63ad80b5f39900c1b29b97ddef81911270ebe8`.
+Mounted test SHA-256:
+`9bd4fa6af84e6e1ec7c281e31694d029e2d3ab0d632d72cc915aa4cedd1b7880`.
+The final cohort passes **70/70**, two files, 1.19s tests/2.27s total; plain
+UI types, scoped formatting and diff checks pass. Root independently verifies
+hashes, reviews the source and runs token gates successfully. Independent child
+scope review is clear. Logs under landing `.paperclip-runtime/landing-20260909/`:
+`composer-stop-toast-alias-red01.log`, `composer-stop-toast-child-red01.log`,
+`composer-stop-toast-child-green-final.log`, and
+`composer-stop-toast-child-types-final.log`.
+
+The unchanged process browser journey is pending on a separate fresh database
+and dedicated local server. Full 892 CI remains under collection before any
+successor push. Its review cannot qualify the uncommitted fix. Original source
+and protected artifacts, live83, provider credentials and provider messages
+were not changed by this repair. Human CODEOWNER approval and separate Teams /
+Telegram native draft Stop qualification remain open.
+
+### September 9, 20:31 UTC — rendered browser review catches the uncached-child case
+
+The root-only `fd247c75…` process browser journey passes **1/1**, 59.0s test /
+1.2m total, zero retries. However, its final actual screenshot visibly contains
+the child-run cancellation toast after the final Cancel subtree operation. Root
+and the landing owner independently viewed that screenshot. This was not the
+teardown notification and not a clean UX pass. An initial anchored test selector
+selected zero tests; that attempt is recorded as zero execution, not coverage.
+The corrected selector was list-verified before the actual journey.
+
+The combined known-history `9c3621eb…` source then passes the existing assertions
+**1/1**, 47.2s test / 57.9s total, on a separate fresh database. Its final actual
+screenshot still contains the same child-run toast. That result disproves full
+acceptance of the history-only correction despite its passing mounted cases.
+The root-only browser trace shows parent identifier/UUID history requests but
+no child route or per-child run-history request: this is a never-visited child.
+After its live membership and execution lock clear, no cached history remains
+from which the client could infer the association.
+
+The previously unasserted final screenshot endpoint now has the same exact
+zero-Dismiss-notification assertion as the earlier Stop checkpoint. Only three
+lines were added, for both adapter rows; no assertion or deadline was weakened.
+Spec SHA-256 `2530ade6a755f9ccbab9b9c08bf4e471ecc2a5ace566777f6860a888f8d3b5ff`.
+The next repair carries only safe exact task-routing metadata on the retryable
+server status delivery, rather than adding a global or indefinite UI suppression
+registry. Server redaction/retry and mounted uncached-child regressions are
+pending; the strengthened exact-source browser journey must then pass visually.
+
+Browser evidence under landing `integration-base-verify-YAhDBQ/` is retained in
+`composer-stop-root-alias-artifacts02` and `composer-stop-combined-alias-artifacts01`,
+each with the actual `process-cancelled.png` and trace. No successor was pushed.
+The ongoing 892 CI has now passed runner verification, clearing its earlier
+ACK-loss failure area, but the known failed browser shard still prevents a green
+overall result. Remaining independent jobs are being allowed to complete.
+
+### September 9, 20:42 UTC — safe retry routing qualifies; full CI exposes a separate deadlock
+
+The retryable status delivery now projects one additional nullable scalar,
+`issueId`, from an existing same-company issue. A left join uses nativeIssueId
+first, otherwise a JSON-string legacy context issueId. Text equality avoids
+casting malformed input; missing, deleted, malformed or foreign associations
+yield null, with no fallback from a present invalid native association. The
+query never selects the complete context, errors or provider output. The existing
+company/run/delivery-marker comparison-and-set and crash/retry semantics remain
+unchanged. This is presentation routing, not new execution authority.
+
+Fresh `chat_close_receipt_20260909_status_route_red01` reproduces the missing
+field in the existing after-publication crash/retry test: one failed / 25
+unselected, 5.57s total. Fourteen bounded association cases cover native and
+legacy positives, native precedence, missing/nonexistent/deleted/foreign values,
+malformed strings, objects, arrays, numbers and JSON null. They assert the exact
+payload allowlist, absence of credential markers and foreign task IDs, preserved
+run set and no provider dispatch. The original durable-marker crash/retry test
+retains its no-duplicate-child checks. A standard optional external-database
+harness uses a fresh caller-migrated database and closes only its owned client;
+the default embedded-database path is unchanged.
+
+The full **40/40** server file passes on separate fresh
+`chat_close_receipt_20260909_status_route_green02`: 1.07s tests / 8.23s total.
+The mounted never-visited-child and explicit-unrelated-task cases join the
+existing cohort for **72/72**, 1.25s tests / 2.05s total. Plain server/UI types,
+diff checks and independent final source review pass. Final server source hash
+is `cd3cc5478473f5b5af8ccf855d9935c3a80b8108e4dd4128d35bcfe1b927eeba`;
+server test `8c1e884894ace5de25d7911f1f4f13ec7a5bdc51b9e9a6551344aad90c6a4189`;
+mounted UI test `1aa4fbac37cb1e48fca5ce06765f7e2591f2d417121df8b226319aad2439e457`.
+UI production remains `9c3621eb…`; initial strengthened spec remains `2530ade6…`.
+Logs in landing runtime: `status-route-red01.log`, `status-route-full-final.log`,
+`status-route-ui-final.log`, and `status-route-{server,ui}-types-final.log`.
+
+The five-file candidate passes the strengthened actual process browser journey
+**1/1**, 45.0s test / 59.9s total, zero retries, on fresh
+`chat_stop_toast_20260909_landing03`, dedicated port 3233. Root and the landing
+owner both view a final screenshot with cancelled parent/child, completed
+unrelated child and the independent live run retained, without a cancellation
+toast. Whitelisted status metadata captures exact issue IDs on parent/child
+retry deliveries after reload; it does not retain raw frames, logs or messages.
+The final resumed child has a captured rich cancellation, but the run ends
+before that generation's next retry. A precise final-generation retry gate is
+being added before the existing final zero-notification assertion; no provider
+delay or change to the effective 120s test deadline is required. Evidence is in
+`integration-base-verify-YAhDBQ/composer-stop-status-route-artifacts01` and
+`composer-stop-status-route-final01.log`. Local landing commit `2fb894c3f` is
+not a remote update.
+
+Full 892 CI completed at 20:34:41 UTC with the browser failure and a second
+independent server-shard failure. The build job genuinely passes all runner
+checks: 38 Node contracts; 1,914 executed TypeScript tests with three existing
+benchmark guards (233.39s); 533 top-level Rust tests plus two executed subprocess
+helpers, no failures; conformance 1/1, replay 11/11, API 870/870; then the full
+workspace build passes. These are actual default-concurrency CI results, not
+the older local serialized approximation. All other independent jobs are green.
+
+Server shard 4 has 2,968 passed / one failed / five existing guards in 1113.49s;
+chat integration is 981/982. At 20:17:45.99 PostgreSQL reports actual `40P01`
+during the second same-delivery Slack INSERT ON CONFLICT DO NOTHING. The first
+failed insertion was intentionally rolled back, its fault spy restored, and
+the first retry returned 200 with one processed delivery. The later duplicate
+returned 503 instead of 200. Processes 2784 and 2791 wait on each other's
+transaction ShareLocks; the available trace identifies one statement as the
+chat_deliveries unique-index insertion but not the opposing SQL statement.
+An adjacent receipt-reaction warning alone does not identify that other owner.
+Root queried all CI artifacts: only browser reports and the PR lockfile remain,
+not PostgreSQL server stderr. Raw evidence is retained in
+`ci-892-server4-job.log`, lines 494–545. A controlled actual-transaction
+interleaving is being prepared; no generic deadlock retry, assertion relaxation
+or speculative source change has been made. The next remote head remains held.
+
+### September 9, 20:50 UTC — exact delayed-event browser acceptance and lock-order repair
+
+The process browser observer now keeps only whitelisted status metadata for
+its own company and exact run. It requires the final newly resumed child to
+receive an actual `cancelled` retry delivery with a nonempty deliveryId and its
+exact issueId, then checks zero notifications and captures the final screenshot.
+The bounded 20s observation covers the existing 15s status sweep; the effective
+120s per-test deadline is unchanged. Raw websocket frames, provider output and
+errors are not retained in this metadata attachment. An early selector that
+could select a preceding nonterminal delivery was tightened to cancelled status.
+
+Fresh `chat_stop_toast_20260909_landing04` passes **1/1** (1.3m total): its
+new child cancelled at 20:43:34.078, with the real retry observed at
+20:43:48.062. Final spec SHA-256
+`4fa2eac8c480efb9cad93ab992acaea4733132d45064e4a6f95815586a1c72ff`
+then passes **1/1** again on fresh `chat_stop_toast_20260909_landing05`
+(1.1m test / 1.3m total), zero retries. The final child `90cf6890…` cancelled
+at 20:46:21.009, retry `c211907a…` arrived at 20:46:34.784 with exact child
+issue `86c79dc1…`, and the notification assertion and screenshot followed.
+Both root and the landing owner inspected both clean final screenshots. The
+second run's first composer click reached its request in 257ms and stopped in
+another 197ms. This is actual local process-adapter/browser qualification,
+not a native model or live provider Stop claim. Logs and trace/screenshots are
+under physical `integration-base-verify-YAhDBQ/`:
+`composer-stop-final-generation{01,02}.log` and
+`composer-stop-final-generation-artifacts{01,02}`. The locally committed spec
+is `6787c34bc`, after routing commit `2fb894c3f`.
+
+The deadlock audit found a concrete reverse order in provider-effect reply
+settlement: successful settlement locked delivery before endpoint, while
+duplicate admission held endpoint before the unique-index delivery INSERT.
+Health-changing failure settlement had the same inversion. A regression uses
+the actual empty-mention service callback and provider-reply path, holds only
+the return of the real successful delivery UPDATE, and queries
+`pg_blocking_pids` to observe the actual blocked admission statement. Releasing
+the old-order settlement produces real PostgreSQL `40P01` at that INSERT:
+**one failed / 982 unselected**, 1.53s tests / 12.37s total, retained in
+`deadlock-red01.log`. It does not fabricate ledger state or provider authority.
+This is a public service-callback regression, not an authenticated live webhook.
+
+The production change moves the existing runtime endpoint lock before action,
+conversation and delivery settlement in success and relevant failure branches.
+Provider I/O remains outside the transaction; lease checks, runtime generation,
+credential fingerprint, attempt/state comparison-and-set, stale-runtime health
+behavior and ambiguous-delivery handling are preserved. No generic retry or
+deadline relaxation was added. Final service SHA-256 is
+`0a45a0c4d4e98fd7a6aa548feaa3f2ff08a52a5bbc18193708a1b2de226190c7`;
+test SHA-256 `a3af6d994d4308c8f0b937ac8198e9c018530d29031bc4c44a4eebe50b91c216`.
+The final matrix uses success plus structured Slack invalid_auth and
+channel_not_found errors, checking exact health outcomes and no duplicate
+reply/task/wake. The broader cohort passes **14/14** (17.04s total), including
+the unchanged original webhook durability case. The exact formatted matrix
+passes **3/3** (10.41s total); plain server types, diff checks and independent
+review pass. Logs: `deadlock-adjacent-final01.log`,
+`deadlock-final-formatted03.log`, `deadlock-types-postformat.log`.
+Only the success branch was exercised against old production for the causal RED;
+the two failure branches are additional post-fix qualification.
+
+The repair is provider-effect reply settlement, not receipt-reaction cleanup,
+despite the abbreviated local commit wording in `e879212f0`. The original CI
+ordinary-message trace still lacks its opposing SQL, so that exact attribution
+remains unproved. The bounded ordinary-message audit found no further proven
+inversion: admission and task mutation lock endpoint first; wake acceptance
+uses an endpoint NOWAIT lock before delivery; receipt settlement has no endpoint
+row lock; standalone SDK state writes do not touch deliveries. Implicit foreign
+key checks on reaction insertion did not establish the missing cycle. No further
+production change is justified by this audit. The reproduced reachable cycle
+and its repair do not erase that limitation; a fresh full integration run remains
+required on the composed candidate.
+
+Related master changes #13108 and #13110 landed as
+`3b550c80facbbb1c35a5ae0ccf00613735712605`. Independent reviews found no
+terminal/recovery-authority conflict. Composition must preserve authoritative
+provider completion instead of semantic-result grace cancellation, exact-thread
+durable history, Codex startup trust and the existing retained-session close
+fences. A fresh private runner/fake provider build, composed types and focused
+history/maintenance/full transport checks are next. A direct/remote same-run
+usage baseline edge is being tested separately; the current runnerd thread/read
+does not return tokenUsage and is not evidence for that accounting issue.
+The exact-base official CI-generated lock is eligible only for temporary private
+dependency materialization, with original bytes restored before commit. No
+original/live lockfile, live83 process, provider credential or message changed.
+No successor push, fresh-successor review or second chat merge is claimed.

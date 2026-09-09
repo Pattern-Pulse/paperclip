@@ -24,7 +24,111 @@ stack ancestry. Neither the provisional count nor prior-head review is final
 verification. Root continues live qualification in the original worktree and
 does not push the remotely coordinated branch.
 
-## Current work — September 9, 20:13 UTC
+## Current work — September 9, 20:50 UTC
+
+The final process browser test now waits for the exact newly resumed child's
+real retryable cancellation delivery before asserting zero notifications and
+taking its screenshot. Two fresh-database runs pass **1/1** each (1.3m total
+each), and root plus the landing owner independently inspected both clean final
+screenshots. Final spec `4fa2eac8…` preserves the effective 120s test deadline,
+actual status sweep and unrelated-run controls. The earlier passing assertions
+with visible child toasts remain recorded as failed UX acceptance, not successes.
+
+A separate controlled provider-effect reply settlement reproduces PostgreSQL
+`40P01` with a duplicate admission waiting at the same unique-index INSERT seen
+in CI. Endpoint-before-delivery lock ordering fixes that concrete cycle. Final
+success, authentication failure and unavailable-resource branches pass **3/3**;
+the broader unchanged-webhook/adjacent cohort passes **14/14**, with types and
+independent review clear. Service `0a45a0c4…` and test `a3af6d99…` are frozen.
+This is provider-effect reply settlement, not reaction cleanup. The original
+ordinary-message CI trace still lacks its opposing SQL statement; matching a
+reachable cycle does not prove that unrecorded attribution.
+
+The landing owner has locally committed the routing/browser/deadlock repairs
+and is composing the related new master `3b550c80…` (#13108 and #13110).
+Independent TypeScript and Rust reviews found no recovery-authority conflict;
+incoming authoritative provider completion, trust and history changes must be
+preserved. A new private runner/fake provider build and composed qualification
+are required. The older binary's proof cannot qualify the new source. A bounded
+direct/remote usage-accounting edge is also being verified separately.
+
+No successor push or second chat merge is claimed. Fresh exact-head full CI,
+Greptile 5/5 and actual human CODEOWNER approval remain required. Foundation
+#13100 is already merged. Live83 and original protected artifacts are unchanged;
+Teams work-tenant installation and Telegram native draft Stop remain unqualified.
+
+### Safe retry routing and completed CI — September 9, 20:42 UTC
+
+The safe status-routing correction passes **40/40** server recovery tests and
+**72/72** UI tests, both typechecks and independent review. The strengthened
+real-process browser journey passes **1/1** (59.9s total) on a fresh database;
+both root and the landing owner inspected a clean final screenshot. An additional
+exact final-generation retry observation is being added before that screenshot,
+since the first run observed earlier-generation retries but ended before the
+final resumed child's next retry delivery. Existing effective test timing stays
+unchanged. These five files are locally committed by the landing owner; no push.
+
+Full 892 CI completed at 20:34:41 with two failures: the known browser toast and
+a separate real PostgreSQL `40P01` deadlock on a duplicate Slack webhook insert.
+The latter is not the previously fixed reaction assertion race. Chat integration
+is 981/982; the full server shard is 2,968 passed / one failed / five existing
+guards. The opposing SQL statement was not retained in available CI artifacts.
+A deterministic lock-interleaving regression and source audit are in progress;
+no speculative lock change or retry-until-green qualification is being used.
+
+All other independent jobs, including complete runner verification and the
+workspace build, pass. The next update remains held for both fixes, final browser
+evidence and a consolidated qualification note. Fresh successor-head CI and
+Greptile 5/5 remain required. Live83 and the original protected artifacts are
+unchanged; separate human CODEOWNER and Teams/Telegram live gates remain open.
+
+### Uncached-child browser finding — September 9, 20:31 UTC
+
+Both subsequent real-process browser runs pass the existing assertions but
+their final rendered screenshots still show a child-run cancellation toast.
+The root-only run is 1/1 (1.2m total); the combined known-history run is 1/1
+(57.9s total). Neither is a clean UX acceptance result. Trace inspection shows
+the child was never opened and had no per-issue linked-history request, so the
+known-cache fixes cannot reconstruct its membership after live state clears.
+
+The browser spec now asserts zero notifications at the final screenshot too,
+with no relaxed assertion or deadline. A narrow server fix is underway to retain
+the exact safe task association on retryable status deliveries, without exposing
+provider output, errors or the complete run context. It will be covered by
+redaction/retry tests and a mounted never-visited-child case, independently
+reviewed, then run through the strengthened browser journey. The prior fixes
+and 70-case proof below remain valid for their narrower known-history cases.
+
+### Reproduced task-alias defects — September 9, 20:29 UTC
+
+Integration #13038 head `89270d75fab79a7ffe6bda19e826fab26d4ec169`
+has a fresh exact-head Greptile **5/5**, but its full CI is not green. Browser
+shard 1 fails the real-process composer Stop journey: after successfully
+stopping the subtree, a redundant parent-run cancellation notification appears.
+The run is being allowed to finish so additional failures are not discarded.
+
+This is a reproduced UI product defect, not another fixture timing repair.
+The visible identifier route missed canonical UUID-keyed run history after
+the first terminal event evicted live membership. A later retryable status
+without `issueId` then appeared unrelated. An ordered mounted regression fails
+with the same informational, bodyless toast. A second regression separately
+reproduces the analogous descendant-history gap after its execution lock clears.
+
+The frozen two-file correction reads exact run IDs through known root aliases
+and current descendants only. It preserves notifications for unrelated runs,
+explicit other-task events, background pages, and removed descendants. Final
+production `9c3621eb…` / mounted test `9bd4fa6a…` pass **70/70** focused tests,
+UI types, scoped formatting, diff checks, token gates and independent review.
+The unchanged real-process browser journey is still being qualified against
+the exact final patch; no browser success or successor-head CI is claimed yet.
+
+Root is holding this documentation for one combined landing-owner update.
+Fresh exact-head CI and Greptile 5/5 will be required for the successor, and
+existing human CODEOWNER requests are not approvals. No original-worktree
+rebase, live83 deployment, second chat merge, or resolution of the separate
+Teams work-tenant / Telegram native draft Stop gaps is claimed.
+
+### Latest-master reconciliation — September 9, 20:13 UTC
 
 Master advanced to `5cb4f061dd185955255099ae95348b3d4a16d7c0` (#13109).
 The landing lane preserved its provider-notice text/display and hidden
