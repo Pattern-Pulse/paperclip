@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { Readable } from "node:stream";
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import path from "node:path";
 import { z } from "zod";
@@ -19,11 +19,17 @@ const BATCH_BYTES = 4 * 1024 * 1024;
 const BATCH_OPERATIONS = 256;
 export type WorkFileTransfer = { entry: WorkTreeEntry; body?: Readable };
 
-function transientReadFailure(error: unknown) {
+function transientTransportFailure(error: unknown) {
   if (!(error instanceof Error)) return false;
-  const code = (error as Error & { code?: string }).code;
-  return ["ECONNRESET", "EPIPE", "EAI_AGAIN", "ECONNABORTED"].includes(code ?? "")
-    || error.message === "socket hang up";
+  const detail = error as Error & { code?: unknown; status?: unknown; statusCode?: unknown; response?: { status?: unknown } };
+  const statuses = [502, 503, 504];
+  return ["ECONNRESET", "EPIPE", "EAI_AGAIN", "ECONNABORTED"].includes(String(detail.code ?? ""))
+    || error.message === "socket hang up"
+    || [detail.status, detail.statusCode, detail.response?.status].some((status) => statuses.includes(status as number))
+    // The plugin RPC preserves this SDK error's message but not its response
+    // metadata. Do not classify arbitrary script output containing "502".
+    || (error.name === "JsonRpcCallError" && detail.code === -32002
+      && /^Request failed with status code (502|503|504)(?:: Sandbox command requested here)?$/.test(error.message));
 }
 
 export function workFolderTransport(runner: CommandManagedRuntimeRunner) {
@@ -31,13 +37,13 @@ export function workFolderTransport(runner: CommandManagedRuntimeRunner) {
   // runners explicitly advertise streaming stdin. Other providers retain the
   // small-argv transport without assuming additional capabilities.
   const bulkStdin = Boolean(runner.syncIn && runner.syncOut) || runner.supportsSingleStreamStdinProgress === true;
-  async function command(input: Record<string, unknown>, stdin?: string): Promise<unknown> {
+  async function command(input: Record<string, unknown>, stdin?: string, deadline = Date.now() + 120_000): Promise<unknown> {
     source ??= readFile(new URL("./scripts/work-folder-io.mjs", import.meta.url), "utf8");
     const args = ["--input-type=module", "-e", await source, Buffer.from(JSON.stringify(input)).toString("base64")];
-    const readOnly = ["home", "scan", "read", "read-batch"].includes(String(input.operation));
-    const deadline = Date.now() + 120_000;
+    const readOnly = ["home", "scan", "read", "read-batch", "batch-status"].includes(String(input.operation));
     let result;
     for (let attempt = 0; ; attempt++) {
+      if (Date.now() >= deadline) throw new Error("Work folder transfer deadline exceeded");
       try {
         result = await runner.execute({ command: "node", args, ...(stdin === undefined ? {} : { stdin }), bypassSession: true,
           timeoutMs: Math.max(1, deadline - Date.now()) });
@@ -46,12 +52,52 @@ export function workFolderTransport(runner: CommandManagedRuntimeRunner) {
         // A lost read response is safe to repeat. Staging writes, publishes and
         // moves may already have happened, so never replay them here.
         const waitMs = 250 * (attempt + 1);
-        if (!readOnly || attempt >= 2 || !transientReadFailure(error) || Date.now() + waitMs >= deadline) throw error;
+        if (!readOnly || attempt >= 2 || !transientTransportFailure(error) || Date.now() + waitMs >= deadline) throw error;
         await delay(waitMs);
       }
     }
     if (result.exitCode !== 0 || result.timedOut) throw new Error(`Work folder ${String(input.operation)} failed: ${result.stderr.slice(0, 1500)}`);
     return JSON.parse(result.stdout);
+  }
+  async function writeBatch(root: string, stagingRoot: string, body: string) {
+    const deadline = Date.now() + 120_000;
+    const identity = { root, stagingRoot, batchId: randomUUID(),
+      batchSha256: createHash("sha256").update(body).digest("hex"), batchReceiptKey: randomBytes(32).toString("hex") };
+    const completedSchema = z.object({ completed: z.number().int().nonnegative().max(512) });
+    const resultSchema = z.union([completedSchema, z.object({ pending: z.literal(true) })]);
+    const statusSchema = z.discriminatedUnion("state", [
+      z.object({ state: z.literal("missing") }), z.object({ state: z.literal("running") }),
+      completedSchema.extend({ state: z.literal("completed") }),
+      z.object({ state: z.literal("failed"), error: z.string().max(500) }),
+    ]);
+    let attempts = 0;
+    let pending = false;
+    let lastError: unknown;
+    while (Date.now() < deadline) {
+      if (!pending) {
+        attempts++;
+        try {
+          const result = resultSchema.parse(await command({ operation: "batch", ...identity }, body, deadline));
+          if ("completed" in result) return result;
+          pending = true;
+        } catch (error) {
+          if (!transientTransportFailure(error)) throw error;
+          lastError = error;
+        }
+      }
+      // An upstream error may have lost only the response. First inspect the
+      // sandbox receipt. A claimed batch is never replayed; it must complete
+      // or remain visibly recoverable when this bounded wait expires.
+      const status = statusSchema.parse(await command({ operation: "batch-status", ...identity }, undefined, deadline));
+      if (status.state === "completed") return { completed: status.completed };
+      if (status.state === "failed") throw new Error(`Work folder batch failed: ${status.error}`);
+      pending = status.state === "running";
+      if (!pending && attempts >= 3) throw lastError ?? new Error("Work folder batch receipt is missing");
+      const waitMs = pending ? 500 : 250 * attempts;
+      if (Date.now() + waitMs >= deadline) break;
+      await delay(waitMs);
+    }
+    throw new Error("Work folder batch outcome is uncertain; retaining sandbox for recovery");
   }
   async function home() {
     const result = z.object({ home: z.string().startsWith("/") }).parse(await command({ operation: "home" }));
@@ -118,7 +164,7 @@ export function workFolderTransport(runner: CommandManagedRuntimeRunner) {
       const body = JSON.stringify(operations);
       if (Buffer.byteLength(body) > 8 * 1024 * 1024) throw new Error("Work folder batch exceeds transfer limit");
       if (publishedEntries.length) await beforePublish?.(publishedEntries);
-      const result = z.object({ completed: z.number().int() }).parse(await command({ operation: "batch", root, stagingRoot }, body));
+      const result = await writeBatch(root, stagingRoot, body);
       if (result.completed !== operations.length) throw new Error("Work folder batch did not complete");
       operations = []; bufferedBytes = 0; publishedEntries = [];
     }

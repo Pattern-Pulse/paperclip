@@ -223,6 +223,19 @@ Other providers keep the small-argument transport. Incoming storage responses
 are prefetched four at a time and closed if transfer fails. Repository restores
 use the same path, then recreate confined repository links.
 
+Read-only sandbox commands retry transient connection failures and HTTP
+502/503/504 responses up to three attempts within one 120-second deadline.
+Script failures, invalid responses, and authorization failures are not retried.
+An incoming bulk batch has a unique ID and a signed receipt in its private
+staging directory. If the provider loses the response, the host checks that
+receipt: a completed batch is acknowledged without publishing its files again;
+only a missing claim permits resubmitting the same batch ID. An atomic claim
+prevents two concurrent submissions from applying the same batch twice. A
+running or interrupted batch is never replayed. Its bounded outcome check
+either observes completion or fails visibly and retains the working copy for
+the next run's existing intent reconciliation. This does not make arbitrary
+sandbox commands or repository mutations retryable.
+
 Repository checkpoints transfer at most four distinct content-addressed blobs
 concurrently, avoiding duplicate uploads for identical files. Small-file reads
 are grouped into at most 1 MiB and 64 files per remote command, with at most

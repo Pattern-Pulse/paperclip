@@ -159,13 +159,14 @@ describe("sandbox work folder transport with real Node and Git", () => {
     await expect(fast.write(dir, staging, { ...entry, path: "../private" }, invalid)).rejects.toThrow();
     expect(invalid.destroyed).toBe(true);
   });
-  it("does not retry a lost batch response or publish an incomplete source", async () => {
+  it("does not replay a lost batch without a verified missing receipt or publish an incomplete source", async () => {
     const execute = vi.fn().mockRejectedValue(new Error("socket hang up"));
     const fast = workFolderTransport({ execute, supportsSingleStreamStdinProgress: true });
     const entry = { path: "file", kind: "file" as const, byteSize: 3,
       sha256: createHash("sha256").update("new").digest("hex"), executable: false };
     await expect(fast.write("/task", "/staging", entry, Readable.from(["new"]))).rejects.toThrow("socket hang up");
-    expect(execute).toHaveBeenCalledTimes(1);
+    const operations = execute.mock.calls.map(([input]) => JSON.parse(Buffer.from(input.args!.at(-1)!, "base64").toString()).operation);
+    expect(operations).toEqual(["batch", "batch-status", "batch-status", "batch-status"]);
     execute.mockClear();
     await expect(fast.write("/task", "/staging", entry, Readable.from(["n"]))).rejects.toThrow("size changed");
     expect(execute).not.toHaveBeenCalled();
