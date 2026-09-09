@@ -1375,6 +1375,30 @@ describe("Codex ACPX runtime adapter", () => {
     });
   });
 
+  it("keeps a rejected prompt observable without an unhandled rejection for event-stream consumers", async () => {
+    const runtime = fakeRuntime();
+    const failure = new Error("recovered prompt failed");
+    vi.mocked(runtime.startTurn).mockImplementation(() => ({
+      requestId: "failed-turn",
+      promptStarted: Promise.reject(failure),
+      events: { async *[Symbol.asyncIterator]() { throw failure; } },
+      result: Promise.reject(failure),
+      cancel: vi.fn(), closeStream: vi.fn(),
+    }));
+    const port = await openCodexAcpxRuntime(openOptions(fakeCommand()), {
+      createRegistry: () => registry(), createStore: () => store(),
+      createRuntime: () => runtime,
+    });
+    const turn = port.startTurn({ text: "Resume.", requestId: "failed-turn" });
+    // The sidecar consumes events and result; it never awaits promptStarted.
+    const events = (async () => { for await (const event of turn.events) void event; })();
+    await expect(events).rejects.toBe(failure);
+    await expect(turn.result).rejects.toBe(failure);
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    await expect(turn.promptStarted).rejects.toBe(failure);
+    await port.close({ reason: "failed prompt observed" });
+  });
+
   it("admits a verified provider that starts with the first recovered turn", async () => {
     const runtime = fakeRuntime();
     const child = fakeChild();

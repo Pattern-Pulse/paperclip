@@ -408,7 +408,8 @@ export interface VerifiedAcpxInstallation {
   readonly commandDigest: string;
   readonly agentServerPackageJsonPath: string;
   readonly agentRuntimePackageJsonPath: string | null;
-  openCommand(): Promise<VerifiedAcpxCommandLease>;
+  /** Reusable leases retain verified bytes and descriptors until explicitly closed. */
+  openCommand(options?: { reusable?: boolean }): Promise<VerifiedAcpxCommandLease>;
 }
 
 export interface VerifiedAcpxCommandLease {
@@ -708,7 +709,7 @@ export async function verifyQualifiedAcpxInstallation(
     commandDigest,
     agentServerPackageJsonPath: serverPackageJsonPath,
     agentRuntimePackageJsonPath: runtimePackageJsonPath,
-    async openCommand(): Promise<VerifiedAcpxCommandLease> {
+    async openCommand(options: { reusable?: boolean } = {}): Promise<VerifiedAcpxCommandLease> {
       const currentDirectory = await openVerifiedCommandDirectory(
         commandDirectory,
         "provider",
@@ -766,6 +767,7 @@ export async function verifyQualifiedAcpxInstallation(
           dependencyAncestorFormats,
           currentRuntimeExecutable,
           runtimeExecutable?.environmentVariable ?? null,
+          options.reusable === true,
         );
       } catch (error) {
         await Promise.all([
@@ -1276,6 +1278,7 @@ function commandLease(
   providerRuntimeExecutable: FileHandle | null,
   providerRuntimeEnvironmentVariable:
     VerifiedAcpxRuntimeExecutable["environmentVariable"] | null,
+  reusable: boolean,
 ): VerifiedAcpxCommandLease {
   let consumed = false;
   let directoriesReleased = false;
@@ -1306,7 +1309,11 @@ function commandLease(
       lifetime?: VerifiedAcpxProviderLifetime,
     ): ChildProcess {
       if (consumed) throw new Error("Verified ACPX command lease is closed");
-      consumed = true;
+      // ACPX may launch once for model selection and reconnect for the turn.
+      // Reuse only the already verified snapshot and pinned descriptors, never
+      // the mutable installation path. The runtime host closes this lease.
+      if (!reusable) consumed = true;
+      const launchBytes = reusable ? Buffer.from(verifiedBytes) : verifiedBytes;
       let child: ChildProcess;
       try {
         const guarded = lifetime !== undefined;
@@ -1467,22 +1474,27 @@ function commandLease(
           providerGuardianOwnership.set(child, ownership);
         }
       } catch (error) {
+        consumed = true;
+        launchBytes.fill(0);
         verifiedBytes.fill(0);
         releaseDirectoriesBestEffort();
         throw error;
       }
-      releaseDirectoriesBestEffort();
+      if (!reusable) releaseDirectoriesBestEffort();
       const sourceInput = child.stdio[COMMAND_SOURCE_FD] as Writable | null;
       if (sourceInput === null) {
+        consumed = true;
+        launchBytes.fill(0);
         verifiedBytes.fill(0);
+        releaseDirectoriesBestEffort();
         child.kill();
         throw new Error("Verified ACPX command source pipe was not created");
       }
       const release = (): void => {
-        verifiedBytes.fill(0);
+        launchBytes.fill(0);
       };
       sourceInput.once("error", release);
-      sourceInput.end(verifiedBytes, release);
+      sourceInput.end(launchBytes, release);
       return child;
     },
     close,

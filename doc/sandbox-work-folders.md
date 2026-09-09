@@ -113,6 +113,11 @@ Native ACPX recovery also admits a provider started lazily by model selection.
 Selection waits for verified process ownership before accepting the configured
 model; cleanup and out-of-band process launches remain fenced. This matters
 when reopening a persisted Codex session after stopping its sandbox.
+The host retains the verified command snapshot and its pinned descriptors until
+runtime cleanup, so reconnecting for the first turn after model selection can
+launch again without reopening a mutable executable path. A failed turn-start
+signal remains observable without crashing a sidecar that consumes only the
+turn's event stream and result.
 The new scoped-shell startup setting is not added to an existing unscoped Codex
 session's protected launch arguments. Its durable provider profile remains
 unchanged during attachment.

@@ -727,6 +727,41 @@ describe("ACPX installation integrity", () => {
     await expectPinnedOutput(lease.spawn(), "verified");
   });
 
+  it("keeps command leases single-use unless reuse is explicitly requested", async () => {
+    const fixture = await installationFixture();
+    const installation = await verifyQualifiedAcpxInstallation(fixture.profile, fixture.resolve);
+    const lease = await installation.openCommand();
+    await expectPinnedOutput(lease.spawn(), "verified");
+    expect(() => lease.spawn()).toThrow("Verified ACPX command lease is closed");
+    await lease.close();
+  });
+
+  it("reconnects with the same verified bytes after the entry path changes", async () => {
+    const fixture = await installationFixture();
+    const installation = await verifyQualifiedAcpxInstallation(fixture.profile, fixture.resolve);
+    const lease = await installation.openCommand({ reusable: true });
+    try {
+      await expectPinnedOutput(lease.spawn(), "verified");
+      await writeFile(fixture.commandPath, '#!/usr/bin/env node\nprocess.stdout.write("replacement");\n');
+      await expectPinnedOutput(lease.spawn(), "verified");
+      await expectPinnedOutput(lease.spawn(), "verified");
+    } finally {
+      await lease.close();
+    }
+    expect(() => lease.spawn()).toThrow("Verified ACPX command lease is closed");
+  });
+
+  it("closing a reusable lease does not erase bytes already handed to a child", async () => {
+    const fixture = await installationFixture();
+    const installation = await verifyQualifiedAcpxInstallation(fixture.profile, fixture.resolve);
+    const lease = await installation.openCommand({ reusable: true });
+    const output = expectPinnedOutput(lease.spawn(), "verified");
+    await lease.close();
+    await output;
+    await lease.close();
+    expect(() => lease.spawn()).toThrow("Verified ACPX command lease is closed");
+  });
+
   it("launches the verified bytes after the open inode is modified", async () => {
     const fixture = await installationFixture();
     const installation = await verifyQualifiedAcpxInstallation(

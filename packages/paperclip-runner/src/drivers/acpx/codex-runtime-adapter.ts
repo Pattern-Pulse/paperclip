@@ -1102,9 +1102,15 @@ function turnWithVerifiedLifetimeOwnership(
     finishOwnershipAdmission(),
   );
   void ownershipVerified.catch(() => undefined);
+  const promptStarted = ownershipVerified.then(() => turn.promptStarted);
+  // The sidecar consumes the event stream and result without awaiting this
+  // optional admission signal. Observe its rejection immediately so a failed
+  // recovered prompt cannot terminate the sidecar as an unhandled rejection.
+  // Keep the original rejecting promise available to callers that await it.
+  void promptStarted.catch(() => undefined);
   return {
     requestId: turn.requestId,
-    promptStarted: ownershipVerified.then(() => turn.promptStarted),
+    promptStarted,
     events: eventsAfterLifetimeOwnership(turn.events, ownershipVerified),
     result: ownershipVerified.then(() => turn.result),
     cancel: (input) => turn.cancel(input),
