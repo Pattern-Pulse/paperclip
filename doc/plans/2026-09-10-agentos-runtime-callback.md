@@ -61,3 +61,25 @@ AgentOS callback configuration and a live, read-only-then-controlled E2E. Keep
 AgentOS runtime execution disabled until both sides are deployed and the
 signed POST, replay, GET receipt, and final status projection have been
 verified.
+
+## Pattern & Pulse image publication (2026-09-10)
+
+The Pattern-Pulse organization keeps its Actions policy in `selected` mode;
+the upstream Paperclip workflows therefore cannot start because they reference
+unapproved marketplace actions. The repository now contains the narrowly
+scoped `.github/workflows/pattern-pulse-container.yml` fallback. It uses only
+the GitHub-owned `actions/checkout@v7`, builds the `production` target for the
+amd64 host, and publishes a full-commit-SHA tag to GHCR. The workflow was
+independently reviewed and passed on commit
+`de655b44747b9088bfe40a7c0a8676a99bd3cdac` (run `34414562754`), including a
+strict digest readback:
+`ghcr.io/pattern-pulse/paperclip:sha-de655b44747b9088bfe40a7c0a8676a99bd3cdac@sha256:cd5ba5cf090949a33210377fe90e77588b5d8b451c5510486a4ac50c4c082f3a`.
+
+The host cutover is intentionally still open. The package is not anonymously
+pullable (`ghcr.io` returned HTTP 401), the current GitHub token lacks
+`read:packages`, and the host has no Docker registry credentials. The running
+host remains on the upstream Paperclip image; neither the Paperclip database
+nor callback environment was changed. Install the image only after a
+least-privilege read credential or an explicitly approved package-visibility
+decision is available, then perform a Paperclip-app-only recreate and the
+signed callback E2E.
