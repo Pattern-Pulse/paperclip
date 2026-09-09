@@ -114,6 +114,10 @@ Sandbox Codex tool commands preserve the environment initialized by the adapter:
 login-shell execution and shell snapshots are disabled so image profiles cannot
 replace the managed Git PATH. This applies to CLI and ACP execution in both
 runner generations; local execution keeps its existing settings.
+Native Codex ACP selects the provider's `agent-full-access` initial mode only
+inside a validated external work-folder sandbox with an explicit `approve-all`
+binding. This avoids starting an unsupported nested network namespace. Local
+execution and the `approve-reads` / `deny-all` modes retain their existing policy.
 CLI state is separate from the four shared collections. A change of task,
 agent, responsible user, or project cannot reuse a sandbox with another binding.
 

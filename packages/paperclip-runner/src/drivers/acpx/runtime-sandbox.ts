@@ -439,6 +439,13 @@ export async function prepareAcpxRuntimeSandbox(input: {
       ? {
           CODEX_HOME: agentHomeDirectory,
           NO_BROWSER: "1",
+          // The admitted external sandbox supplies OS isolation. Codex ACP's
+          // default mode otherwise starts a second network namespace, which
+          // cannot initialize inside Daytona. Only the host's explicit
+          // approve-all binding may select this provider mode.
+          ...(input.binding.permissionMode === "approve-all"
+            && externalWorkFolderEnvironment(input.environment ?? {}).HOME
+            ? { INITIAL_AGENT_MODE: "agent-full-access" } : {}),
           ...(launchEnvironment.CODEX_API_KEY ||
           launchEnvironment.OPENAI_API_KEY
             ? { DEFAULT_AUTH_REQUEST: JSON.stringify({ methodId: "api-key" }) }

@@ -49,6 +49,28 @@ describe("ACPX runtime sandbox", () => {
       .toBe("allow_login_shell = false\n\n[features]\nshell_snapshot = false\n");
   });
 
+  it.each(["approve-all", "approve-reads", "deny-all"] as const)(
+    "uses the external sandbox boundary only for explicitly approved Codex execution (%s)", async (permissionMode) => {
+      const fixture = await sandboxFixture("codex");
+      const home = join(fixture.root, "home");
+      const environment = {
+        HOME: home, PAPERCLIP_RUNNER_EXTERNAL_SANDBOX: "1",
+        INITIAL_AGENT_MODE: "agent-full-access",
+        ...Object.fromEntries(["task", "agent", "user", "project", "repos"].map((scope) =>
+          [`PAPERCLIP_${scope.toUpperCase()}_DIR`, join(home, scope)])),
+      };
+      const sandbox = await prepareAcpxRuntimeSandbox({
+        binding: { ...fixture.binding, permissionMode }, agent: "codex", environment,
+      });
+      expect(sandbox.launchEnvironment.INITIAL_AGENT_MODE).toBe(permissionMode === "approve-all" ? "agent-full-access" : undefined);
+      const local = await prepareAcpxRuntimeSandbox({
+        binding: { ...fixture.binding, permissionMode }, agent: "codex",
+        environment: { ...environment, PAPERCLIP_RUNNER_EXTERNAL_SANDBOX: undefined },
+      });
+      expect(local.launchEnvironment.INITIAL_AGENT_MODE).toBeUndefined();
+    },
+  );
+
   it.each([
     ["pi", "OPENROUTER_API_KEY", "pi-home"],
     ["claude", "ANTHROPIC_API_KEY", "claude-home"],
