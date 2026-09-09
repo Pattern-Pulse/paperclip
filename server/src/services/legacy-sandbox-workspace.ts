@@ -1,4 +1,4 @@
-import { and, eq, isNull, notExists, sql } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, notExists, or, sql } from "drizzle-orm";
 import { environmentLeases, heartbeatRuns, workFolderRuns, type Db } from "@paperclipai/db";
 import type { EnvironmentLease } from "@paperclipai/shared";
 
@@ -20,7 +20,14 @@ export async function taskUsesLegacySandboxWorkspace(db: Db, companyId: string, 
     .leftJoin(workFolderRuns, eq(workFolderRuns.runId, heartbeatRuns.id))
     .where(and(eq(environmentLeases.companyId, companyId), eq(environmentLeases.issueId, issueId),
       sql`${environmentLeases.metadata}->>'driver' = 'sandbox'`,
-      eq(heartbeatRuns.status, "succeeded"), isNull(workFolderRuns.runId),
+      // A failed or interrupted old run may still have written valuable work.
+      // New leases are marked scoped before preparation, so preparation failure
+      // must not accidentally opt a new task into the compatibility path.
+      sql`${environmentLeases.metadata}->>'workFolderLayout' is distinct from 'scoped'`,
+      or(eq(heartbeatRuns.status, "succeeded"), isNotNull(heartbeatRuns.startedAt),
+        sql`${environmentLeases.metadata}->'reusableSandboxLease'->>'version' = '1'`,
+        sql`${environmentLeases.metadata}->>'workFolderLayout' = 'legacy'`),
+      isNull(workFolderRuns.runId),
       notExists(db.select({ id: workFolderRuns.runId }).from(workFolderRuns).where(and(
         eq(workFolderRuns.companyId, companyId), sql`${workFolderRuns.manifest}->>'taskId' = ${issueId}`))))).limit(1);
   return Boolean(previous);

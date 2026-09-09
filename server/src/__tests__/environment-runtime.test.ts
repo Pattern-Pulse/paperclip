@@ -480,6 +480,15 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
     expect(await taskUsesLegacySandboxWorkspace(db, randomUUID(), taskId)).toBe(false);
     expect(await taskUsesLegacySandboxWorkspace(db, seeded.companyId, randomUUID())).toBe(false);
     expect(await taskUsesLegacySandboxWorkspace(db, seeded.companyId, null)).toBe(false);
+    for (const status of ["failed", "cancelled"] as const) {
+      await db.update(heartbeatRuns).set({ status, startedAt: new Date() }).where(eq(heartbeatRuns.id, seeded.runId));
+      expect(await taskUsesLegacySandboxWorkspace(db, seeded.companyId, taskId)).toBe(true);
+    }
+    await db.update(environmentLeases).set({ metadata: { ...seeded.reusableLease.metadata, workFolderLayout: "scoped" } })
+      .where(eq(environmentLeases.id, seeded.reusableLease.id));
+    expect(await taskUsesLegacySandboxWorkspace(db, seeded.companyId, taskId)).toBe(false);
+    await db.update(environmentLeases).set({ metadata: seeded.reusableLease.metadata })
+      .where(eq(environmentLeases.id, seeded.reusableLease.id));
     const scopedRunId = randomUUID();
     await db.insert(heartbeatRuns).values({ id: scopedRunId, companyId: seeded.companyId, agentId: seeded.agentId, status: "succeeded" });
     await db.insert(workFolderRuns).values({ runId: scopedRunId, companyId: seeded.companyId,
