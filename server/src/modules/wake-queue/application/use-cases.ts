@@ -194,6 +194,20 @@ async function runReleaseDrain(
 
     // decision.kind === "promote"
     const invokableAgent = deferredAgent!;
+
+    // Claim the wake for promotion before any other write in this branch
+    // (design choice: claim first, then reopen). A reopen write, or its
+    // `issue_reopened` post-commit effect, must never survive a lost race on
+    // this compare-and-set. When the claim fails, a concurrent writer already
+    // changed the wake's status, so this candidate is gone; move on to the
+    // next one instead of ending the drain.
+    const claimedForPromotion = await ports.writer.claimDeferredWakeForPromotion({
+      companyId: run.companyId,
+      wakeId: workingCandidate.id,
+      now: input.now,
+    });
+    if (!claimedForPromotion) continue;
+
     let currentIssue = issue;
 
     if (workingCandidate.deferredCommentIds.length > 0 && (currentIssue.status === "done" || currentIssue.status === "cancelled")) {
@@ -261,12 +275,12 @@ async function runReleaseDrain(
 
     const promotedRoutineEnvContext = await ports.reader.getRoutineEnv({
       companyId: invokableAgent.companyId,
-      issueId: currentIssue.id,
+      issue: currentIssue,
     });
     const responsibleUserId = await ports.reader.resolveResponsibleUserId({
       companyId: invokableAgent.companyId,
       contextSnapshot: promotedContextSnapshot,
-      issueId: currentIssue.id,
+      issue: currentIssue,
       routineEnvContext: promotedRoutineEnvContext,
       requestedByActorType: workingCandidate.requestedByActorType as "user" | "agent" | "system" | null,
       requestedByActorId: workingCandidate.requestedByActorId,
@@ -288,7 +302,7 @@ async function runReleaseDrain(
       );
     }
 
-    const promotedRun = await ports.writer.promoteDeferredWake({
+    const promotedRun = await ports.writer.finalizePromotedWake({
       companyId: run.companyId,
       wakeId: workingCandidate.id,
       deferredAgent: invokableAgent,
@@ -303,11 +317,6 @@ async function runReleaseDrain(
       sessionBefore,
       now: input.now,
     });
-    if (!promotedRun) {
-      // The company-scoped compare-and-set lost a race after the decision was
-      // made; treat the release as plain, unpromoted completion.
-      return { outcome: { kind: "released" }, postCommitEffects };
-    }
 
     postCommitEffects.push({ kind: "run_queued", run: promotedRun });
     return { outcome: { kind: "promoted", run: promotedRun }, postCommitEffects };

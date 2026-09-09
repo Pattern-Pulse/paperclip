@@ -32,6 +32,12 @@ export type IssueSnapshot = {
   originKind: string | null;
   monitorNextCheckAt: Date | null;
   executionState: Record<string, unknown> | null;
+  /** Carried so the routine-env and responsible-user reader ports can use this
+   * transaction-scoped snapshot instead of reading the issue again. */
+  responsibleUserId: string | null;
+  parentId: string | null;
+  originId: string | null;
+  originRunId: string | null;
 };
 
 export type InvokableAgentSnapshot = {

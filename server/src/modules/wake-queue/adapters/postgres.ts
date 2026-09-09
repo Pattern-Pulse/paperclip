@@ -110,6 +110,10 @@ function toIssueSnapshot(row: IssueRow): IssueSnapshot {
     originKind: row.originKind,
     monitorNextCheckAt: row.monitorNextCheckAt,
     executionState: (row.executionState as Record<string, unknown> | null) ?? null,
+    responsibleUserId: row.responsibleUserId,
+    parentId: row.parentId,
+    originId: row.originId,
+    originRunId: row.originRunId,
   };
 }
 
@@ -316,12 +320,12 @@ function buildWriter(tx: Db, deps: WakeQueuePostgresAdapterDeps): WakeQueueWrite
       return { allSelfAuthored: rows.length > 0 && rows.every((row) => row.createdByRunId === finishingRunId) };
     },
 
-    async reopenIssue({ issueId }) {
-      const updated = await issuesSvc.update(issueId, { status: "todo", executionState: null }, tx);
+    async reopenIssue({ companyId, issueId }) {
+      const updated = await issuesSvc.updateForCompany(issueId, companyId, { status: "todo", executionState: null }, tx);
       return updated ? toIssueSnapshot(updated as unknown as IssueRow) : null;
     },
 
-    async promoteDeferredWake(input) {
+    async claimDeferredWakeForPromotion({ companyId, wakeId, now }) {
       const claimed = await tx
         .update(agentWakeupRequests)
         .set({
@@ -330,18 +334,20 @@ function buildWriter(tx: Db, deps: WakeQueuePostgresAdapterDeps): WakeQueueWrite
           claimedAt: null,
           finishedAt: null,
           error: null,
-          updatedAt: input.now,
+          updatedAt: now,
         })
         .where(
           and(
-            eq(agentWakeupRequests.id, input.wakeId),
-            eq(agentWakeupRequests.companyId, input.companyId),
+            eq(agentWakeupRequests.id, wakeId),
+            eq(agentWakeupRequests.companyId, companyId),
             eq(agentWakeupRequests.status, DEFERRED_WAKE_STATUS),
           ),
         )
         .returning({ id: agentWakeupRequests.id });
-      if (!claimed.length) return null;
+      return claimed.length > 0;
+    },
 
+    async finalizePromotedWake(input) {
       const newRun = await tx
         .insert(heartbeatRuns)
         .values({
@@ -359,12 +365,25 @@ function buildWriter(tx: Db, deps: WakeQueuePostgresAdapterDeps): WakeQueueWrite
         .returning()
         .then((rows) => rows[0]);
 
+      // `claimDeferredWakeForPromotion` already moved this row off
+      // `deferred_issue_execution` inside this same transaction, so no
+      // concurrent claimer can still match that guard; this extra `runId is
+      // null` guard only protects against writing the link twice.
       await tx
         .update(agentWakeupRequests)
         .set({ runId: newRun.id, updatedAt: input.now })
-        .where(and(eq(agentWakeupRequests.id, input.wakeId), eq(agentWakeupRequests.companyId, input.companyId)));
+        .where(
+          and(
+            eq(agentWakeupRequests.id, input.wakeId),
+            eq(agentWakeupRequests.companyId, input.companyId),
+            isNull(agentWakeupRequests.runId),
+          ),
+        );
 
-      // Promoted mention wakes are issue-scoped, not issue ownership transfers.
+      // Promoted mention wakes are issue-scoped, not issue ownership
+      // transfers. The lock-clearing step earlier in this transaction
+      // already set `executionRunId` to null for this issue, so the `is
+      // null` guard only protects against taking the lock twice.
       await tx
         .update(issues)
         .set({
@@ -378,6 +397,7 @@ function buildWriter(tx: Db, deps: WakeQueuePostgresAdapterDeps): WakeQueueWrite
             eq(issues.id, input.issue.id),
             eq(issues.companyId, input.companyId),
             eq(issues.assigneeAgentId, input.deferredAgent.id),
+            isNull(issues.executionRunId),
           ),
         );
 
@@ -538,11 +558,11 @@ function buildWriter(tx: Db, deps: WakeQueuePostgresAdapterDeps): WakeQueueWrite
         "normal_model",
       );
 
-      const routineEnvContext = await deps.getRoutineEnv({ companyId, issueId: issue.id });
+      const routineEnvContext = await deps.getRoutineEnv({ companyId, issue });
       const responsibleUserId = await deps.resolveResponsibleUserId({
         companyId,
         contextSnapshot: recoveryContextSnapshot,
-        issueId: issue.id,
+        issue,
         routineEnvContext,
         requestedByActorType: "system",
         requestedByActorId: null,
@@ -653,7 +673,13 @@ async function recordNativeTerminalRecoveryIfNeeded(tx: Db, run: HeartbeatRunRow
         failureCode: "native_continuation_requires_reconciliation",
         updatedAt: now,
       })
-      .where(and(eq(nativeRunFinalizations.runId, run.id), isNull(nativeRunFinalizations.resultId)));
+      .where(
+        and(
+          eq(nativeRunFinalizations.companyId, issue.companyId),
+          eq(nativeRunFinalizations.runId, run.id),
+          isNull(nativeRunFinalizations.resultId),
+        ),
+      );
     await issueRecoveryActionService(tx).upsertSourceScoped({
       companyId: issue.companyId,
       sourceIssueId: issue.id,

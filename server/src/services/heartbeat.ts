@@ -8446,11 +8446,15 @@ export function heartbeatService(
 
   const wakeQueue = createWakeQueue(db, {
     resolveResponsibleUserId: async (input) => {
-      const issueContext = await getIssueExecutionContext(input.companyId, input.issueId);
+      // `input.issue` is the wake-queue module's own transaction-scoped
+      // snapshot; using it here, instead of re-reading the issue through
+      // `getIssueExecutionContext`, keeps this read off a second connection
+      // while the module's transaction is open, and keeps it seeing the
+      // in-transaction issue status rather than a stale one.
       return resolveResponsibleUserIdForRunSeed({
         companyId: input.companyId,
         contextSnapshot: input.contextSnapshot,
-        issueContext,
+        issueContext: input.issue,
         // The wake-queue module's port type widens `env` to `unknown` so its
         // application layer stays free of this file's routine env type; the
         // value always comes from this file's own getRoutineEnvForExecutionIssue.
@@ -8465,11 +8469,20 @@ export function heartbeatService(
       });
     },
     getRoutineEnv: async (input) => {
-      const issueContext = await getIssueExecutionContext(input.companyId, input.issueId);
-      return getRoutineEnvForExecutionIssue(input.companyId, issueContext);
+      // Same reason as `resolveResponsibleUserId` above: use the passed-in
+      // transaction-scoped issue snapshot instead of reading the issue again.
+      return getRoutineEnvForExecutionIssue(input.companyId, input.issue);
     },
     resolveSessionBeforeForWakeup: async (input) => {
-      const agent = await getAgent(input.agentId);
+      // Scoped to this port only, so a wake-queue agent id can never resolve
+      // a session against another company's agent row. The shared `getAgent`
+      // helper below has no company predicate, so this reads the agent
+      // directly with the company named in its own `WHERE` clause.
+      const agent = await db
+        .select()
+        .from(agents)
+        .where(and(eq(agents.id, input.agentId), eq(agents.companyId, input.companyId)))
+        .then((rows) => rows[0] ?? null);
       if (!agent) return null;
       return resolveSessionBeforeForWakeup(agent, input.taskKey);
     },
@@ -9224,7 +9237,7 @@ export function heartbeatService(
 
   async function getRoutineEnvForExecutionIssue(
     companyId: string,
-    issueContext: Awaited<ReturnType<typeof getIssueExecutionContext>> | null,
+    issueContext: { originKind: string | null; originId: string | null; originRunId: string | null } | null,
   ) {
     if (
       !issueContext ||
@@ -9377,7 +9390,7 @@ export function heartbeatService(
   async function resolveResponsibleUserIdForRunSeed(input: {
     companyId: string;
     contextSnapshot: Record<string, unknown>;
-    issueContext: Awaited<ReturnType<typeof getIssueExecutionContext>> | null;
+    issueContext: { id: string; responsibleUserId: string | null; parentId: string | null } | null;
     routineEnvContext: Awaited<
       ReturnType<typeof getRoutineEnvForExecutionIssue>
     >;
@@ -22658,7 +22671,9 @@ export function heartbeatService(
         error instanceof WakeQueueApplicationError &&
         error.code === "responsible_user_unresolved"
       ) {
-        throw new HttpError(422, error.message, error.details);
+        // Every other `responsible_user_unresolved` HttpError in this file
+        // carries `code` inside its own `details`; match that shape here too.
+        throw new HttpError(422, error.message, { code: error.code, ...error.details });
       }
       throw error;
     }

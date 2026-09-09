@@ -24,10 +24,15 @@ export type ReleaseTransactionResult = {
 /** Read-only lookups the release use case needs, each scoped to a company. */
 export interface WakeQueueReader {
   findInvokableAgent(input: { companyId: string; agentId: string }): Promise<InvokableAgentSnapshot | null>;
+  /**
+   * Takes the transaction-scoped issue snapshot, not an issue id, so this
+   * port never re-reads the issue on a separate connection while the
+   * module's own transaction is open.
+   */
   resolveResponsibleUserId(input: {
     companyId: string;
     contextSnapshot: Record<string, unknown>;
-    issueId: string;
+    issue: IssueSnapshot;
     /** From a prior `getRoutineEnv` call against the same issue; pass `{ routineId: null, env: null, responsibleUserId: null }` when the issue is not a routine execution. */
     routineEnvContext: { routineId: string | null; env: unknown; responsibleUserId: string | null };
     requestedByActorType: "user" | "agent" | "system" | null;
@@ -36,9 +41,14 @@ export interface WakeQueueReader {
     triggerDetail: string | null;
     existingRunResponsibleUserId: string | null;
   }): Promise<string | null>;
+  /**
+   * Takes the transaction-scoped issue snapshot, not an issue id, so this
+   * port never re-reads the issue on a separate connection while the
+   * module's own transaction is open.
+   */
   getRoutineEnv(input: {
     companyId: string;
-    issueId: string;
+    issue: IssueSnapshot;
   }): Promise<{ routineId: string | null; env: unknown; responsibleUserId: string | null }>;
   resolveSessionBeforeForWakeup(input: {
     companyId: string;
@@ -135,7 +145,20 @@ export interface WakeQueueWriter {
     commentIds: string[];
   }): Promise<{ allSelfAuthored: boolean }>;
   reopenIssue(input: { companyId: string; issueId: string; runId: string }): Promise<IssueSnapshot | null>;
-  promoteDeferredWake(input: PromoteDeferredWakeInput): Promise<RunSummary | null>;
+  /**
+   * Atomically claims the wake for promotion, guarded on its current
+   * `deferred_issue_execution` status. Call this before any other write in
+   * the promotion path (including a reopen), so a lost race here can never
+   * leave another write committed underneath it. Returns `false` when a
+   * concurrent writer already changed the wake's status.
+   */
+  claimDeferredWakeForPromotion(input: { companyId: string; wakeId: string; now: Date }): Promise<boolean>;
+  /**
+   * Finalizes a wake that `claimDeferredWakeForPromotion` already claimed:
+   * inserts the queued run, links it back onto the wake row, and takes the
+   * issue's execution lock. Call only after that claim returns `true`.
+   */
+  finalizePromotedWake(input: PromoteDeferredWakeInput): Promise<RunSummary>;
   /** An open run already on this issue (optionally scoped to one agent) that would race a new recovery run. */
   hasExistingExecutionPath(input: {
     companyId: string;
