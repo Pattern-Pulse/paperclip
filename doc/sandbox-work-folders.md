@@ -333,12 +333,25 @@ All routes start at
 The Cloud app image includes a build-owned remote provider pack at
 `/opt/paperclip-runner/provider-pack` and configures
 `PAPERCLIP_RUNNER_REMOTE_PROVIDER_PACK_PATH` to that directory. Native OpenCode
-and ACPX runs verify the sandbox's installed pack against this manifest; if it
-differs, the host stages its complete pack before launch. The pack is built
+and ACPX runs verify the sandbox's installed pack against this manifest. Reuse
+requires a valid full manifest digest and matching content, including artifact
+hashes, the distribution tree, dependency pins, platform, and Node requirements.
+The source revision remains provenance; a revision-only difference does not
+require retransferring identical contents. App and sandbox builds omit the
+redundant `dist/bin/paperclip-runnerd` from the pack because that executable is
+shipped and verified separately. If content differs, the host stages its
+complete pack before launch. The pack is built
 from the app revision, includes the production lockfile and artifact hashes,
 and must pass its provider-launch checks during the image build. It belongs to
 the app image, not the workspace volume or a scoped file collection. Ordinary
 local execution is unchanged.
+
+When diagnosing startup delays, distinguish scoped-file hydration from native
+runtime preparation. `work_folder.prepared` records the intended layout before
+hydration completes. `provider_pack.verify_preinstalled` reports installed-pack
+verification; a fallback within `runner.artifact.prepare` can transfer gigabytes
+independently of task files. Acceptance must prove that a matching image uses
+its installed pack instead of silently relying on that fallback.
 
 Automated tests do not qualify a deployed runner image. Before merging, use a
 new pinned staging stack with the branch's Cloud image and matching migrator.

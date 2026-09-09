@@ -34,6 +34,7 @@ export const DAYTONA_IMAGE_INPUT_PATHS = [
   "packages/paperclip-runner/runner/crates",
   "packages/paperclip-runner/scripts/acpx-sidecar-contract.mjs",
   "packages/paperclip-runner/scripts/build-provider-pack.mjs",
+  "packages/paperclip-runner/scripts/provider-pack-layout.mjs",
   "packages/paperclip-runner/scripts/materialize-pi-binary.mjs",
   "packages/paperclip-runner/scripts/portable-provider-shim.mjs",
   "packages/paperclip-runner/scripts/verify-pi-provider-launch.mjs",

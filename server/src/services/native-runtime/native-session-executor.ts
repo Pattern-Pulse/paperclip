@@ -5341,6 +5341,36 @@ export function readRemoteProviderPackManifest(
   return structuredClone(manifest);
 }
 
+/** Verify bytes against the host-owned content contract while retaining revision provenance. */
+export function buildRemoteProviderPackVerificationScript(): string {
+  return [
+    "const fs=require('node:fs')",
+    "const crypto=require('node:crypto')",
+    "const path=require('node:path')",
+    "const root=process.argv[1]",
+    "const expected=JSON.parse(Buffer.from(process.argv[2],'base64').toString('utf8'))",
+    "const actual=fs.readFileSync(path.join(root,'provider-pack.json'),'utf8').trim()",
+    "const canonical=(v)=>Array.isArray(v)?'['+v.map(canonical).join(',')+']':v&&typeof v==='object'?'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}':JSON.stringify(v)",
+    "const manifest=JSON.parse(actual)",
+    "const digest=(payload)=>'sha256:'+crypto.createHash('sha256').update(canonical(payload)).digest('hex')",
+    "if(manifest.schema!==expected.schema||!manifest.payload||!(/^[0-9a-f]{40}(?:-dirty)?$/).test(manifest.payload.runnerSourceRevision))throw new Error('manifest schema or revision mismatch')",
+    "if(digest(manifest.payload)!==manifest.digest)throw new Error('manifest digest mismatch')",
+    "const content=(value)=>{const {digest:provenanceDigest,...fields}=value;const {runnerSourceRevision,...payload}=fields.payload;return {...fields,payload}}",
+    "if(canonical(content(manifest))!==canonical(content(expected)))throw new Error('manifest content mismatch')",
+    "const hash=(p)=>'sha256:'+crypto.createHash('sha256').update(fs.readFileSync(path.join(root,p))).digest('hex')",
+    "const tree=(treeRoot)=>{const digest=crypto.createHash('sha256');const visit=(directory,prefix='')=>{for(const entry of fs.readdirSync(directory,{withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name))){const relative=prefix?prefix+'/'+entry.name:entry.name;const absolute=path.join(directory,entry.name);if(entry.isDirectory()){digest.update('directory\\0'+relative+'\\n');visit(absolute,relative)}else if(entry.isFile()){digest.update('file\\0'+relative+'\\0'+'sha256:'+crypto.createHash('sha256').update(fs.readFileSync(absolute)).digest('hex')+'\\n')}else if(entry.isSymbolicLink()){digest.update('symlink\\0'+relative+'\\0'+fs.readlinkSync(absolute)+'\\n')}else throw new Error('unsupported dist entry '+relative)}};visit(treeRoot);return 'sha256:'+digest.digest('hex')}",
+    "for(const name of ['nodeCommand','productionLock','opencodeCommand','opencodeExecutable','opencodeProxy','acpxSidecar']){const artifact=manifest.payload.artifacts[name];if(hash(artifact.path)!==artifact.sha256)throw new Error(name+' digest mismatch')}",
+    "if(tree(path.join(root,'dist'))!==manifest.payload.distDigest)throw new Error('dist tree digest mismatch')",
+    "const version=process.versions.node.split('.').map(Number)",
+    "const minimum=manifest.payload.pins.nodeMinimum.split('.').map(Number)",
+    "if(version[0]<minimum[0]||(version[0]===minimum[0]&&(version[1]<minimum[1]||(version[1]===minimum[1]&&version[2]<minimum[2]))))throw new Error('Node version incompatible')",
+    "if(process.platform!==manifest.payload.target.platform||process.arch!==manifest.payload.target.architecture)throw new Error('provider pack target mismatch')",
+    "const packageVersion=(pkg)=>JSON.parse(fs.readFileSync(path.join(root,'node_modules',...pkg.split('/'),'package.json'),'utf8')).version",
+    "const expectedPackages={acpx:manifest.payload.pins.acpx,'@agentclientprotocol/claude-agent-acp':manifest.payload.pins.claudeAcp,'@agentclientprotocol/codex-acp':manifest.payload.pins.codexAcp,'opencode-ai':manifest.payload.pins.opencode}",
+    "for(const [pkg,version] of Object.entries(expectedPackages))if(packageVersion(pkg)!==version)throw new Error(pkg+' version mismatch')",
+  ].join(";");
+}
+
 export function assertRemoteRunnerBuildMetadata(
   value: unknown,
   requiredMode: "dial_wss" | "listen_ws",
@@ -6544,28 +6574,7 @@ async function createRunnerdBackendWithinSessionClaim(
       packRoot,
       expectedProviderPackManifest.payload.artifacts.nodeCommand.path,
     );
-    const verifyScript = [
-      "const fs=require('node:fs')",
-      "const crypto=require('node:crypto')",
-      "const path=require('node:path')",
-      "const root=process.argv[1]",
-      "const expected=Buffer.from(process.argv[2],'base64').toString('utf8')",
-      "const actual=fs.readFileSync(path.join(root,'provider-pack.json'),'utf8').trim()",
-      "const canonical=(v)=>Array.isArray(v)?'['+v.map(canonical).join(',')+']':v&&typeof v==='object'?'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}':JSON.stringify(v)",
-      "const manifest=JSON.parse(actual)",
-      "if(canonical(manifest)!==expected)throw new Error('manifest mismatch')",
-      "const hash=(p)=>'sha256:'+crypto.createHash('sha256').update(fs.readFileSync(path.join(root,p))).digest('hex')",
-      "const tree=(treeRoot)=>{const digest=crypto.createHash('sha256');const visit=(directory,prefix='')=>{for(const entry of fs.readdirSync(directory,{withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name))){const relative=prefix?prefix+'/'+entry.name:entry.name;const absolute=path.join(directory,entry.name);if(entry.isDirectory()){digest.update('directory\\0'+relative+'\\n');visit(absolute,relative)}else if(entry.isFile()){digest.update('file\\0'+relative+'\\0'+'sha256:'+crypto.createHash('sha256').update(fs.readFileSync(absolute)).digest('hex')+'\\n')}else if(entry.isSymbolicLink()){digest.update('symlink\\0'+relative+'\\0'+fs.readlinkSync(absolute)+'\\n')}else throw new Error('unsupported dist entry '+relative)}};visit(treeRoot);return 'sha256:'+digest.digest('hex')}",
-      "for(const name of ['nodeCommand','productionLock','opencodeCommand','opencodeExecutable','opencodeProxy','acpxSidecar']){const artifact=manifest.payload.artifacts[name];if(hash(artifact.path)!==artifact.sha256)throw new Error(name+' digest mismatch')}",
-      "if(tree(path.join(root,'dist'))!==manifest.payload.distDigest)throw new Error('dist tree digest mismatch')",
-      "const version=process.versions.node.split('.').map(Number)",
-      "const minimum=manifest.payload.pins.nodeMinimum.split('.').map(Number)",
-      "if(version[0]<minimum[0]||(version[0]===minimum[0]&&(version[1]<minimum[1]||(version[1]===minimum[1]&&version[2]<minimum[2]))))throw new Error('Node version incompatible')",
-      "if(process.platform!==manifest.payload.target.platform||process.arch!==manifest.payload.target.architecture)throw new Error('provider pack target mismatch')",
-      "const packageVersion=(pkg)=>JSON.parse(fs.readFileSync(path.join(root,'node_modules',...pkg.split('/'),'package.json'),'utf8')).version",
-      "const expectedPackages={acpx:manifest.payload.pins.acpx,'@agentclientprotocol/claude-agent-acp':manifest.payload.pins.claudeAcp,'@agentclientprotocol/codex-acp':manifest.payload.pins.codexAcp,'opencode-ai':manifest.payload.pins.opencode}",
-      "for(const [pkg,version] of Object.entries(expectedPackages))if(packageVersion(pkg)!==version)throw new Error(pkg+' version mismatch')",
-    ].join(";");
+    const verifyScript = buildRemoteProviderPackVerificationScript();
     const verified = await remoteCommandRunner.execute({
       command: providerNodeCommand,
       args: ["-e", verifyScript, packRoot, expected],
@@ -6905,7 +6914,7 @@ async function createRunnerdBackendWithinSessionClaim(
           activeRemoteProviderPackRoot = stagedRemoteProviderPackRoot;
           await input.onLog?.(
             "stderr",
-            "[paperclip-runner] using manifest-matched provider pack from the sandbox image\n",
+            "[paperclip-runner] using content-matched provider pack from the sandbox image\n",
           );
         } catch {
           preinstalledProviderPack = null;

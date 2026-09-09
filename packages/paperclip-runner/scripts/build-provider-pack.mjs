@@ -1,3 +1,4 @@
+import { normalizeProviderPackLayout } from "./provider-pack-layout.mjs";
 import { portableProviderShim } from "./portable-provider-shim.mjs";
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -112,6 +113,8 @@ try {
   if (deployed.status !== 0) {
     throw new Error(`pnpm deploy failed with exit code ${deployed.status}`);
   }
+
+  normalizeProviderPackLayout(temporaryRoot);
 
   // Fail the image build if a bridge silently brings back an older/private
   // provider CLI. A direct dependency alone does not deduplicate pnpm's graph.
