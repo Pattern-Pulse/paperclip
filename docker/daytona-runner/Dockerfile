@@ -15,12 +15,13 @@ RUN cargo build --locked --release -p paperclip-runner-core --bin paperclip-runn
 FROM node:24-bookworm@sha256:9137a20e25879e0b557227b57e3ee4e9af4bde29eb3db66134cd1723e84f830b AS provider-pack-build
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 WORKDIR /workspace
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc tsconfig.base.json ./
+COPY package.json pnpm-workspace.yaml .npmrc tsconfig.base.json ./
+COPY docker/daytona-runner/provider-dependencies.lock.yaml ./pnpm-lock.yaml
 COPY patches ./patches
 COPY scripts/link-plugin-dev-sdk.mjs ./scripts/link-plugin-dev-sdk.mjs
-# CI owns pnpm-lock.yaml and regenerates it for manifest-only PRs. Include the
-# complete workspace manifest graph so all source-owned patches apply, then
-# resolve before the frozen install. This happens only during image creation.
+# Provider dependencies use a separate immutable lock, shared with the Cloud
+# provider-pack stage. The CI-owned app lock may be regenerated independently.
+# Include the complete manifest graph so frozen installation checks every input.
 COPY packages ./packages
 COPY server/package.json ./server/package.json
 COPY ui/package.json ./ui/package.json
@@ -29,8 +30,7 @@ COPY cli/package.json ./cli/package.json
 # Reject registry-time drift BEFORE installing packages or running lifecycle code.
 # Refresh this digest together with source/provider dependency changes.
 ARG PAPERCLIP_RUNNER_LOCK_SHA256=84409576c7cbd2bec50b535c6df6acf3691bdec7c7697e6c50b2fb834b56f203
-RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile \
-    && printf '%s  pnpm-lock.yaml\n' "${PAPERCLIP_RUNNER_LOCK_SHA256}" > /tmp/provider-lock.sha256 \
+RUN printf '%s  pnpm-lock.yaml\n' "${PAPERCLIP_RUNNER_LOCK_SHA256}" > /tmp/provider-lock.sha256 \
     && sha256sum -c /tmp/provider-lock.sha256 \
     && pnpm install --frozen-lockfile --filter '@paperclipai/paperclip-runner...'
 ARG PAPERCLIP_RUNNER_SOURCE_REVISION

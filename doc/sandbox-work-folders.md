@@ -367,13 +367,15 @@ verification; a fallback within `runner.artifact.prepare` can transfer gigabytes
 independently of task files. Acceptance must prove that a matching image uses
 its installed pack instead of silently relying on that fallback.
 
-Commit an up-to-date workspace lockfile whenever runner dependencies change.
-The app and qualified sandbox must use the same resolved lockfile bytes; matching
-source files alone does not prove matching dependencies. A stale lockfile can
-force independent builds to resolve newer transitive packages and invalidate
-preinstalled-pack reuse. Check the committed lockfile with pnpm 9.15.4 using
-`pnpm install --lockfile-only --ignore-scripts --ignore-pnpmfile --frozen-lockfile`
-and compare the actual app and sandbox production-lock hashes before acceptance.
+Both provider-pack build stages install from the immutable
+`docker/daytona-runner/provider-dependencies.lock.yaml` using pnpm 9.15.4 and a
+frozen install. This deployment input is separate from the CI-owned app
+lockfile. Each stage checks its SHA-256 before installing, builds the provider
+entrypoints under that graph, and records the installed lock in the pack.
+Refresh this lock from a reviewed CI-resolved artifact when provider manifests
+or patches change, update both expected hashes, and qualify a new sandbox image.
+Matching source files alone does not prove matching dependencies: acceptance
+also compares the actual app and sandbox production-lock hashes.
 
 Native and legacy Git credential callbacks honor the same experimental duplex
 setting and provider capability gates. When streaming is disabled or unavailable,
