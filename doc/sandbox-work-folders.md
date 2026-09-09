@@ -96,6 +96,12 @@ second workspace or resume the sandbox concurrently. An active predecessor or
 an incomplete release reports a retryable resume error and preserves the lease.
 The next run claims the reusable lease in Postgres before resuming the provider;
 competing server processes cannot both resume the same released sandbox.
+An incomplete resume keeps a provisional lease marker until provider verification
+succeeds. Failed-run cleanup retains that exact lease without stopping or deleting
+its sandbox, so a retry cannot silently create a replacement. Daytona refreshes
+the live sandbox state on explicit resume, including externally stopped resources
+whose cached handles still say running. Failure to stop a reusable sandbox is
+reported and retained for retry; it never falls back to deletion or orphan cleanup.
 This applies to both runner generations and leaves distinct task/user bindings
 isolated.
 The new scoped-shell startup setting is not added to an existing unscoped Codex
