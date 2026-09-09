@@ -32,6 +32,7 @@ import { summarySlotRoutes } from "./routes/summary-slots.js";
 import { statusCardRoutes } from "./routes/status-cards.js";
 import { teamsCatalogRoutes } from "./routes/teams-catalog.js";
 import { agentRoutes } from "./routes/agents.js";
+import { agentosRuntimeCallbackRoutes } from "./routes/agentos-runtime.js";
 import type { SetupTokenSessionService } from "./services/setup-token-session.js";
 import {
   buildSetupTokenLoginTransport,
@@ -341,14 +342,6 @@ export async function createApp(
   // when the server may be reachable without a known reverse proxy in front.
   applyTrustProxy(app, parseTrustProxyEnv(process.env.TRUST_PROXY));
 
-  app.use(COMPANY_IMPORT_API_PATH, express.json({
-    limit: PORTABLE_JSON_BODY_LIMIT,
-    verify: captureRawBody,
-  }));
-  app.use(express.json({
-    limit: DEFAULT_JSON_BODY_LIMIT,
-    verify: captureRawBody,
-  }));
   app.use("/api", apiCompression());
   app.use(httpLogger);
   const privateHostnameGateEnabled = shouldEnablePrivateHostnameGuard({
@@ -366,6 +359,28 @@ export async function createApp(
       bindHost: opts.bindHost,
     }),
   );
+  // AgentOS runtime callbacks use their own bounded raw-body + bearer/HMAC
+  // contract. Consume only this route before the global JSON parser so an
+  // unauthenticated callback cannot trigger JSON parsing at the larger API
+  // limit. The callback router then runs before the general actor middleware
+  // so its token can never be interpreted as a board or agent API key.
+  app.use(
+    "/api/agentos-runtime/v1/runs/:runId/attempts/:attempt/callbacks",
+    express.raw({
+      type: "application/json",
+      limit: "64kb",
+      verify: captureRawBody,
+    }),
+  );
+  app.use("/api", agentosRuntimeCallbackRoutes(db));
+  app.use(COMPANY_IMPORT_API_PATH, express.json({
+    limit: PORTABLE_JSON_BODY_LIMIT,
+    verify: captureRawBody,
+  }));
+  app.use(express.json({
+    limit: DEFAULT_JSON_BODY_LIMIT,
+    verify: captureRawBody,
+  }));
   app.use(cloudRuntimeIdentityMiddleware(db));
   // Connection-intent tools carry their own short-lived, run-bound bearer and
   // must be reachable by remote adapters that intentionally do not receive an
