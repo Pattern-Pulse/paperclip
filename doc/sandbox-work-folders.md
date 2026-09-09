@@ -224,6 +224,12 @@ success. Optional SDK streaming checksums are disabled to avoid an unhandled
 digest rejection when a source file changes during transfer. Work-folder SHA-256
 verification and complete-checkpoint publication remain required. A changing
 source must fail its save without stopping the application or another run.
+Scoped-file and repository-blob uploads retry transient network errors and
+retryable HTTP responses up to three attempts, using the same object key. Each
+attempt opens a fresh source and verifies its complete size and SHA-256; the
+previous request and reader must settle before another attempt starts. Changed
+content, ownership errors, and authentication failures are not retried. Exhausted
+retries retain the previous complete checkpoint and the recoverable working copy.
 
 Deletion moves files to recoverable trash. Restore rejects path collisions.
 Explicit purge and permanent owner deletion schedule object cleanup through a

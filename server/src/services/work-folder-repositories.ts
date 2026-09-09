@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
-import { Readable, Transform } from "node:stream";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { taskRepositoryBindings, workFolderObjects, type Db } from "@paperclipai/db";
 import { validateWorkFilePath } from "@paperclipai/shared";
 import { z } from "zod";
 import { registerWorkFolderObject } from "./work-folder-garbage.js";
+import { uploadWorkFolderObject } from "./work-folder-upload.js";
 import type { StorageProvider } from "../storage/types.js";
 import type { WorkFolderTransport, WorkTreeEntry } from "./work-folder-transport.js";
 
@@ -40,14 +40,9 @@ export function workFolderRepositoryService(db: Db, storage: StorageProvider, tr
       const objectKey = entry.kind === "file" && !entry.linkTarget ? `${prefix}blobs/${entry.sha256}` : null;
       if (objectKey && !known.has(objectKey)) await registerWorkFolderObject(db, storage, { objectKey, companyId: binding.companyId, repositoryBindingId: binding.id });
       if (objectKey && !known.has(objectKey) && !(await storage.headObject({ objectKey })).exists) {
-        const hash = createHash("sha256");
-        const verify = new Transform({ transform(chunk: Buffer, _encoding, callback) { hash.update(chunk); callback(null, chunk); },
-          flush(callback) { callback(hash.digest("hex") === entry.sha256 ? undefined : new Error("Repository changed during checkpoint")); } });
-        const source = transport.read(root, entry.path, entry.byteSize);
-        source.on("error", (error) => verify.destroy(error));
-        try {
-          await storage.putObject({ objectKey, body: source.pipe(verify), contentType: "application/octet-stream", contentLength: entry.byteSize });
-        } finally { source.destroy(); verify.destroy(); }
+        await uploadWorkFolderObject(storage, { objectKey, contentType: "application/octet-stream",
+          contentLength: entry.byteSize, sha256: entry.sha256!,
+          createSource: () => transport.read(root, entry.path, entry.byteSize) });
       }
       files.push({ ...entry, objectKey });
     }

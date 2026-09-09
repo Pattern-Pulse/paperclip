@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { Readable } from "node:stream";
 import { createHash, randomUUID } from "node:crypto";
 import { eq, inArray, sql } from "drizzle-orm";
 import fs from "node:fs/promises";
@@ -345,6 +346,54 @@ describe("shared sandbox work-folder lifecycle", () => {
     const retry = await prepare(run.home, randomUUID(), leaseId, userId);
     await retry.stop(); active.splice(active.indexOf(retry), 1);
     expect((await svc.list(folder)).files.map((file) => file.path)).toContain("private");
+  }, 120_000);
+
+  it("reopens repository blobs after transient PUT failures and retains the previous checkpoint when retries exhaust", async () => {
+    const leaseId = randomUUID();
+    const run = await prepare(path.join(root, "replayed-repository-upload"), leaseId);
+    await run.flush();
+    const filename = path.join(run.primaryRepo, "retry-upload");
+    const content = "replay the entire repository file";
+    await fs.writeFile(filename, content);
+    const targetHash = createHash("sha256").update(content).digest("hex");
+    const put = storage.putObject.bind(storage);
+    const streams: Readable[] = [];
+    let attempts = 0;
+    const recover = vi.spyOn(storage, "putObject").mockImplementation(async (input) => {
+      if (input.objectKey.endsWith("/" + targetHash)) {
+        streams.push(input.body as Readable);
+        if (++attempts === 1) {
+          await (input.body as Readable).iterator({ destroyOnReturn: false }).next();
+          throw Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+        }
+      }
+      return put(input);
+    });
+    try { await run.flush(); } finally { recover.mockRestore(); }
+    expect(attempts).toBe(2);
+    expect(new Set(streams).size).toBe(2);
+    expect(streams.every((stream) => stream.destroyed)).toBe(true);
+    const bindingId = run.manifest.repositories[0]!.bindingId;
+    const [before] = await db.select().from(taskRepositoryBindings).where(eq(taskRepositoryBindings.id, bindingId));
+    await fs.writeFile(filename, "retain this unsaved edit");
+    const nextHash = createHash("sha256").update("retain this unsaved edit").digest("hex");
+    let failedAttempts = 0;
+    const fail = vi.spyOn(storage, "putObject").mockImplementation(async (input) => {
+      if (input.objectKey.endsWith("/" + nextHash)) {
+        failedAttempts++;
+        for await (const _chunk of input.body as Readable) { /* Lost response after consuming the body. */ }
+        throw Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+      }
+      return put(input);
+    });
+    try {
+      await expect(run.stop()).rejects.toThrow("socket hang up");
+      expect(failedAttempts).toBe(3);
+      const [after] = await db.select().from(taskRepositoryBindings).where(eq(taskRepositoryBindings.id, bindingId));
+      expect(after!.checkpointKey).toBe(before!.checkpointKey);
+      expect(await fs.readFile(filename, "utf8")).toBe("retain this unsaved edit");
+      expect(await retainUnsavedWorkFolderLease(db, { id: leaseId, companyId })).toBe(true);
+    } finally { fail.mockRestore(); active.splice(active.indexOf(run), 1); }
   }, 120_000);
 
   it("does not publish a partial repository checkpoint and recovers a failed final save in a new run", async () => {

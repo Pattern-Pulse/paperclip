@@ -9,6 +9,7 @@ import { and, asc, eq, gt, isNull, isNotNull, max, sql } from "drizzle-orm";
 import { workFolders, workFiles, workFileOperations, workFolderObjects, type Db } from "@paperclipai/db";
 import { validateWorkFilePath, type WorkFile, type WorkFolderOwner } from "@paperclipai/shared";
 import { registerWorkFolderObject } from "./work-folder-garbage.js";
+import { uploadWorkFolderObject } from "./work-folder-upload.js";
 import type { StorageProvider } from "../storage/types.js";
 import { badRequest, conflict, notFound, payloadTooLarge } from "../errors.js";
 
@@ -92,6 +93,7 @@ export function workFolderService(db: Db, storage: StorageProvider) {
     const spool = path.join(directory, "content");
     const hash = createHash("sha256");
     let byteSize = 0;
+    let sha256: string | null = null;
     let objectKey: string | null = null;
     let discardUpload = false;
     try {
@@ -103,12 +105,13 @@ export function workFolderService(db: Db, storage: StorageProvider) {
           hash.update(chunk);
           callback(null, chunk);
         } }), createWriteStream(spool, { mode: 0o600 }));
+        sha256 = hash.digest("hex");
+        if (input.expectedSha256 && input.expectedSha256 !== sha256) throw conflict("File changed during transfer; retry the checkpoint");
         objectKey = `${folder.companyId}/work-folders/${folder.id}/${randomUUID()}`;
         await registerWorkFolderObject(db, storage, { objectKey, companyId: folder.companyId, folderId: folder.id });
-        await storage.putObject({ objectKey, body: createReadStream(spool), contentLength: byteSize,
-          contentType: input.contentType ?? "application/octet-stream" });
+        await uploadWorkFolderObject(storage, { objectKey, createSource: () => createReadStream(spool),
+          contentLength: byteSize, sha256, contentType: input.contentType ?? "application/octet-stream" });
       }
-      const sha256 = kind === "file" ? hash.digest("hex") : null;
       if (input.expectedSha256 && input.expectedSha256 !== sha256) throw conflict("File changed during transfer; retry the checkpoint");
       const value = { kind, objectKey, byteSize, sha256, executable: input.executable ?? false,
         contentType: input.contentType ?? "application/octet-stream", updatedAt: new Date() };

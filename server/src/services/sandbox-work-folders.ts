@@ -7,6 +7,7 @@ import { WORK_FOLDER_SCOPES, type SandboxWorkFolderManifest, type WorkFolderScop
 import type { AdapterSandboxExecutionTarget } from "@paperclipai/adapter-utils/execution-target";
 import type { StorageProvider } from "../storage/types.js";
 import { loadConfig } from "../config.js";
+import { logger } from "../middleware/logger.js";
 import { createStorageProviderFromConfig } from "../storage/provider-registry.js";
 import { resolveDefaultAgentWorkspaceDir } from "../home-paths.js";
 import { createGitRemoteAuthProvider } from "./git-credentials.js";
@@ -319,7 +320,15 @@ export async function prepareSandboxWorkFolders(input: {
       for (const { binding, root } of bindings) await repositories.checkpoint(binding, root);
       await saveState("saved");
     },
-    async onError() { await saveState("failed", "Files could not be saved; the sandbox must be retained for recovery"); },
+    async onError(error) {
+      const failure = error as { name?: unknown; code?: unknown; $metadata?: { httpStatusCode?: unknown } } | null;
+      // Do not log SDK request objects, headers, file contents or credentials.
+      const label = (value: unknown) => typeof value === "string" && /^[A-Za-z0-9_]{1,80}$/.test(value) ? value : null;
+      logger.warn({ runId: input.runId, errorName: label(failure?.name), errorCode: label(failure?.code),
+        httpStatus: typeof failure?.$metadata?.httpStatusCode === "number" ? failure.$metadata.httpStatusCode : null },
+      "Work folder checkpoint failed; retaining sandbox for recovery");
+      await saveState("failed", "Files could not be saved; the sandbox must be retained for recovery");
+    },
   });
   let completion: Promise<void> | null = null;
   function stop(beforeCompletion?: () => Promise<void>) {
