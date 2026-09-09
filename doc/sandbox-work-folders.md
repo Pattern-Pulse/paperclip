@@ -84,6 +84,12 @@ overlay. This preserves its index and repository-local state. The legacy
 outbound merge still saves working files to the host. A missing native sync
 stamp on a pre-change lease does not make the host copy authoritative.
 
+When an older sandbox image lacks a required runner capability, startup stages
+the server-resolved runner artifact, including the vendored binary in packaged
+server builds. The uploaded artifact and the controller's runner identity use
+the same file. Replacement is atomic and preserves the previous launcher if
+staging fails; it does not reset the task's working files or provider session.
+
 Acceptance must resume representative pre-upgrade legacy and native tasks with
 committed, staged, unstaged, and untracked work, verify their original paths and
 usable continuation, and exercise their existing restore mechanism after a

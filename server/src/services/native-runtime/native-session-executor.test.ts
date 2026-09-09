@@ -6454,6 +6454,50 @@ describe("runnerd provider runtime wiring", () => {
     ).toBe(false);
   });
 
+  it.each(["missing", "incompatible"])(
+    "stages the server-resolved artifact when the image runner is %s",
+    async (imageRunner) => {
+      const artifact = join(isolatedStateDirectory, "vendored-runnerd");
+      await writeFile(artifact, "server-owned runner bytes", { mode: 0o700 });
+      state.resolveRunnerBinary.mockReturnValueOnce(artifact);
+      const syncIn = vi.fn(async () => { throw new Error("observed-runner-upload"); });
+      const remoteExecute = vi.fn(async (command: { command: string; args?: string[] }) => {
+        const script = command.args?.[1] ?? "";
+        let stdout = "";
+        if (script.includes("command -v paperclip-runnerd")) {
+          stdout = imageRunner === "missing" ? "" : "/usr/local/bin/paperclip-runnerd\n";
+        } else if (command.args?.[0] === "--build-metadata") {
+          stdout = "{}"; // An incompatible image must fall back to the app artifact.
+        } else if (script === "uname -s; uname -m") {
+          const os = process.platform === "darwin" ? "Darwin" : "Linux";
+          const arch = process.arch === "x64" ? "x86_64" : "aarch64";
+          stdout = `${os}\n${arch}\n`;
+        }
+        return { exitCode: 0, signal: null, timedOut: false, stderr: "", stdout };
+      });
+      await createRunnerdBackend({
+        db: leaseDb(execution), execution, runnerInstanceId: "runner-vendored-artifact",
+        runnerIngressAuthorized: true,
+        runnerExecutionTarget: {
+          kind: "remote", transport: "sandbox", remoteCwd: "/workspace",
+          environmentId: "environment", leaseId: "lease", providerKey: "daytona",
+          effectiveCapabilities: { runnerWebSocketIngress: true },
+          runner: { execute: remoteExecute, syncIn },
+        } as never,
+      });
+      state.createTransport.mockClear();
+      state.createBackend.mock.calls.at(-1)![1].codexTransportFactory!();
+      const transport = state.createTransport.mock.calls[0]![0] as RunnerTransportOptions & {
+        controlPlaneRegistration: (authority: unknown) => Promise<unknown>;
+      };
+      expect(transport.runnerBinary).toBe(artifact);
+      await expect(transport.controlPlaneRegistration({})).rejects.toThrow("observed-runner-upload");
+      expect(syncIn).toHaveBeenCalledWith([
+        expect.objectContaining({ files: [expect.objectContaining({ sourcePath: artifact, kind: "file", mode: 0o700 })] }),
+      ]);
+    },
+  );
+
   it("binds a remote launch to the configured controller-owned runner artifact", async () => {
     const remoteCwd = "/home/daytona/paperclip-workspace";
     const controllerArtifact = "/controller/artifacts/paperclip-runnerd";

@@ -40,7 +40,6 @@ import {
   acpxRuntimeSessionDirectoryName,
   createNativeSessionBackend,
   createRunnerdCodexTransport,
-  defaultCapabilityRunnerdBinary,
   executeNativeSession,
   parseNativeExecutionInput,
   parsePaperclipQuestionSet,
@@ -6708,8 +6707,10 @@ async function createRunnerdBackendWithinSessionClaim(
       }
     }
     if (!usedPreinstalledRunner) {
-      const sourceBinary =
-        explicitRemoteBinary ?? defaultCapabilityRunnerdBinary();
+      // Use the same server-resolved artifact the transport hashes. The
+      // package's development fallback does not resolve the vendored layout
+      // in a built server, even though its bin/paperclip-runnerd is present.
+      const sourceBinary = controllerRunnerBinary;
       if (!existsSync(sourceBinary)) {
         throw new Error("runner_remote_artifact_unavailable");
       }
