@@ -762,7 +762,7 @@ describe("remote provider pack manifest", () => {
     });
     const providerExecution = {
       ...execution,
-      provider: { kind: "opencode", model: null },
+      provider: { kind: "opencode", model: "openrouter/deepseek/deepseek-v4-flash-0731" },
       session: { ...execution.session, normalizedSessionId: `revision-only-${randomUUID()}`, driverKind: "opencode_server" },
     } as NativeExecutionInputV1;
     await createRunnerdBackend({
