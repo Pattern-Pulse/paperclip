@@ -24,7 +24,7 @@ stack ancestry. Neither the provisional count nor prior-head review is final
 verification. Root continues live qualification in the original worktree and
 does not push the remotely coordinated branch.
 
-## Current work — September 9, 20:50 UTC
+## Current work — September 9, 21:05 UTC
 
 The final process browser test now waits for the exact newly resumed child's
 real retryable cancellation delivery before asserting zero notifications and
@@ -44,13 +44,28 @@ This is provider-effect reply settlement, not reaction cleanup. The original
 ordinary-message CI trace still lacks its opposing SQL statement; matching a
 reachable cycle does not prove that unrecorded attribution.
 
-The landing owner has locally committed the routing/browser/deadlock repairs
-and is composing the related new master `3b550c80…` (#13108 and #13110).
-Independent TypeScript and Rust reviews found no recovery-authority conflict;
-incoming authoritative provider completion, trust and history changes must be
-preserved. A new private runner/fake provider build and composed qualification
-are required. The older binary's proof cannot qualify the new source. A bounded
-direct/remote usage-accounting edge is also being verified separately.
+The related-master candidate is now clean `2175d352…`, based on `3b550c80…`
+(#13108 and #13110), **384 files**. It preserves incoming provider completion,
+trust/history and retained-close fences. A fresh private runner `9e87775a…`
+and fake providers are built; focused Rust checks pass **9/9**, server executor
+**313/313**, runtime/backend/driver **289/289**, UI **329/329**, and UI/server
+types plus token gates pass. Additional focused release-gate checks pass **29/29**:
+default-off hides chat while production GitHub tool setup stays available.
+No wireframe images returned. Full transport passes **171/171** on the fresh
+runner in 230.36s, followed by plain runner types; all requested local gates
+are now green. The landing owner will append this final evidence and publish
+one consolidated update, without changing the qualified production bytes.
+
+Fresh full chat integration passes **985/985**, zero skips/retries, 421.61s,
+on retained `chat_close_receipt_20260909_full_3b01`. The observer captured two
+ordinary lock waits and no `40P01`; service/test hashes stayed unchanged.
+This full pass does not identify the original CI opposing SQL retroactively.
+
+The direct/remote usage edge is genuinely reproduced and repaired: same-run
+recovery retains runDelta 40 instead of overwriting it with cumulative 140.
+The final two-file repair passes its **77/77** focused cohort, types and review;
+that cohort overlaps the broader driver tests rather than adding unique coverage.
+No runnerd authority or live provider failure is inferred from the accounting bug.
 
 No successor push or second chat merge is claimed. Fresh exact-head full CI,
 Greptile 5/5 and actual human CODEOWNER approval remain required. Foundation

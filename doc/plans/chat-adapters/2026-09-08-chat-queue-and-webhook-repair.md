@@ -7170,3 +7170,113 @@ The exact-base official CI-generated lock is eligible only for temporary private
 dependency materialization, with original bytes restored before commit. No
 original/live lockfile, live83 process, provider credential or message changed.
 No successor push, fresh-successor review or second chat merge is claimed.
+
+### September 9, 20:59 UTC — related-master composition and same-run usage repair
+
+Private composition `4bcd4e78fc5fe3185e205ccb0a6395836e45b98d` has exact
+parent `3b550c80…`. Two repeated-context materialization hunks were caught by
+the landing owner's diff check and corrected before any test or build. Incoming
+native-session-runtime source is byte-identical to master; obsolete semantic
+result grace cancellation is absent, and the server's runnerd-specific
+`requireSessionCloseBeforeReturn` fence remains. Final private checkpoint
+`2175d35231b8243ef7a1eb52cbf175477a58c526` adds the accounting pair and root's
+qualification notes, stays clean, and changes **384 files** against master.
+Its image changes are only the three provider SVG icons; no wireframe raster
+images returned. Archived wireframe generator source remains.
+
+The related dependency was materialized only in the physical stage using
+official Refresh Lockfile run `34401941642` and bot commit
+`7c54d45a29be9d214b935beff41659a44557fe94`: root independently verifies its
+parent is exact `3b550c80…` and its sole change is pnpm-lock.yaml. CI lock
+SHA-256 is `384784943b5a63fb7b351187c0f3dbb1e9f3e61f70e7bee3c435c302f8aedea6`.
+It resolves the new smol-toml dependency to 1.8.0; no version was guessed or
+tracked lock regenerated. The restoration trap returns the stage's tracked
+lock to exact `822ecb8c…`; root verifies that hash and an empty lockfile diff.
+
+The new private release runner build passes in 26.68s and the debug fake
+provider build in 13.14s. Staged runner SHA-256 is
+`9e87775afcc83404e473ba9bf4534dcd723d1875eba4015420718f51f03cef16`.
+Fresh Rust startup trust, lightweight history, resume diagnostic, no-cold-launch
+terminal receipt, retained Stop and same-thread active resume checks pass
+**9/9** with explicit one test thread and unchanged deadlines. The server
+executor cohort passes **313/313**, 6.84s tests / 11.94s total.
+Root's composed UI cohort passes **329/329** across seven files, no skips,
+3.07s tests / 7.83s total, plus plain UI types and all token gates. The initial
+`--project ui` command selected no named project and executed zero tests;
+the retained corrected run uses the UI project directory. Logs under physical
+`integration-base-verify-YAhDBQ/`: `upstream-3b-runner-build.log`,
+`upstream-3b-rust-focused.log`, `upstream-3b-server-executor.log`,
+`composed-3b-ui-final02.log`, `composed-3b-ui-types-final01.log`, and
+`composed-3b-token-gates-final01.log`.
+
+The upstream review also reproduced a distinct accounting defect through the
+actual TypeScript driver lifecycle with simulated provider RPC: first run uses
+100 input tokens, second run reaches cumulative 140, then an active same-run
+JSON-checkpoint recovery reads cumulative 140. Baseline identity and no-new-turn
+checks pass, but raw reconciliation overwrites runDelta 40. The one-case causal
+RED and full baseline file's one failed / two passed results are retained in
+`codex-same-run-reconcile-usage-red01.log` and
+`codex-same-run-reconcile-usage-baseline-file.log`. This affects direct/remote
+reads containing usage, not the current native runnerd read that omits it, and
+does not establish a recovery-authority or terminal-fence failure.
+
+The narrow repair applies the existing monotonic observer only to Codex with an
+existing persisted baseline, then overlays run totals/delta on bounded provider
+metadata. It preserves no-baseline and other-facade behavior, history validation,
+run identity and execution ordering. Tests cover thread- and response-level
+usage, repeated/lower/higher totals, a second genuine checkpoint/recovery, old
+checkpoint immutability and no fresh turn. The other-facade retained field is an
+explicit negative fixture, not manufactured positive recovery proof. Final
+source SHA-256 is `28fe20467ad91b7678544e7f840db9f651258d4924f21001700efdda3fb80426`;
+test SHA-256 `a312dec52c341cab88e983da04a94e7efae6ae7afae118413de8f90c4eb8fa63`.
+The final five-file cohort passes **77/77**, 148ms tests / 1.68s total; plain
+runner types, scoped formatting, diff checks and independent review pass.
+Logs: `codex-same-run-reconcile-usage-final.log` and
+`codex-same-run-reconcile-usage-types.log`.
+
+The final nine-file runtime/backend/Codex driver cohort passes **289/289** on
+clean `2175d352…`, 2.85s tests / 4.89s total. Plain server types also pass.
+Logs: `upstream-3b-runtime-driver-final.log` and
+`upstream-3b-server-types-final.log`. The 77-case accounting cohort overlaps
+this broader driver coverage; the counts are not an additive unique-test total.
+
+Independent release-gate review and focused tests also pass: **23** UI cases
+(117 filtered), **five** settings API/service cases (81 filtered), and **one**
+shared-schema case (22 filtered). Default-off hides chat catalog entries,
+the chat/tool chooser and direct setup/detail/identity routes, while ordinary
+GitHub tool identity/setup remains available. The client gate fails closed on
+missing/loading/error/refetch state and hides cached entries when disabled.
+This visibility gate intentionally does not interrupt an already connected
+provider's delivery. No wireframe raster or binary additions are present.
+Logs: `release-gate-ui-final01.log` (6.78s), `release-gate-api-final01.log`
+(4.21s), and `release-gate-shared-final01.log` (220ms). These are scoped contract
+checks, not a claim that all tests in those filtered files were rerun.
+
+Fresh full chat integration passes **985/985**, no skips/exclusions/retries,
+409.74s tests / 421.61s total, exit 0, on retained database
+`chat_close_receipt_20260909_full_3b01`. The run started at `4bcd4e78…` and
+ended after the physical documentation/HEAD alignment to `2175d352…`; its
+service `0a45a0c4…`, integration test `a3af6d99…` and tracked lock `822ecb8c…`
+were byte-identical before and after. Its exact-database read-only observer
+retained two blocked/blocking snapshots: an advisory wait and duplicate
+endpoint FOR UPDATE wait. No `40P01` or observer error occurred. The expected
+NOWAIT denial and injected scheduler outages are passing negative cases, not
+discarded failures. PostgreSQL collector settings remained unchanged; server
+stderr is not SQL-accessible. Evidence is landing runtime
+`chat-full-3b01-observed.log`, SHA-256
+`044b8948ee586d9b4f5620b6b6052ea753f57af9017479e5dea1b55200808a9e`.
+This full green result does not retrospectively identify the missing ordinary-CI
+opposing SQL statement.
+
+At the final 21:05 UTC collection, full transport passes **171/171**, no skips,
+229.57s tests / 230.36s total, against the exact new `9e87775a…` staged runner.
+Plain runner types then pass and the complete command chain exits 0. Logs:
+`upstream-3b-transport-full-final.log` and `upstream-3b-runner-types-final.log`.
+This is fresh-artifact coverage, not reuse of the earlier binary's 171-test proof.
+All requested local gates are green, with source unchanged after qualification.
+The landing owner will append these two final documentation files and publish
+one consolidated update. Fresh exact successor-head full CI and Greptile 5/5
+are required; older-head green jobs or review do not satisfy them. Existing
+human CODEOWNER requests are not approvals. Live83, original lockfile
+`47a7c093…`, original runner `6279d39a…` and all provider accounts remain
+unchanged. No second chat merge or new live deployment is claimed.
