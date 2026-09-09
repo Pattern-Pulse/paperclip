@@ -1314,7 +1314,9 @@ function createSandboxEnvironmentDriver(
       leasePolicy: lease.leasePolicy,
       provider: lease.provider,
       providerLeaseId: lease.providerLeaseId,
-      expiresAt: lease.expiresAt ? new Date(lease.expiresAt) : null,
+      // The retained provider's old expiry may already be past. The resume RPC
+      // will attest its current expiry; until then use only this run's deadline.
+      expiresAt: input.requestedExpiresAt ?? null,
       metadata: lease.metadata,
       replacesReusableLeaseId: lease.id,
     });

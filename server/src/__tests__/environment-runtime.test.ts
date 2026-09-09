@@ -5860,6 +5860,7 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
     // flight. It must see the new database owner before it can touch the disk.
     await db.update(heartbeatRuns).set({ status: "succeeded" }).where(eq(heartbeatRuns.id, nextRunId));
     await environmentService(db).releaseLease(result.value.lease.id, "released");
+    await db.update(environmentLeases).set({ expiresAt: new Date(0) }).where(eq(environmentLeases.id, result.value.lease.id));
     const raceIds = [randomUUID(), randomUUID()];
     await db.insert(heartbeatRuns).values(raceIds.map((id) => ({
       id, companyId: seeded.companyId, agentId: seeded.agentId, status: "running",
@@ -5881,6 +5882,9 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
     // If acquisition regresses before the RPC, surface that rejection too.
     await Promise.race([resumeStarted, winner.then(() => undefined)]);
     try {
+      const claimed = (await environmentService(db).listLeases(seeded.environment.id))
+        .find((lease) => lease.heartbeatRunId === raceIds[0]);
+      expect(claimed).toMatchObject({ status: "active", expiresAt: null });
       const otherServer = environmentRuntimeService(db, { pluginWorkerManager: workerManager });
       await expect(otherServer.acquireRunLease({
         companyId: seeded.companyId, environment: seeded.environment, issueId: taskId,
