@@ -327,3 +327,10 @@ as incomplete. Active native turns keep their existing restart/reattach behavior
 Local and SSH session shutdown behavior is unchanged. A hard process kill cannot
 guarantee a provider-session checkpoint; scoped files and repository durability
 remain limited to the last successfully published work-folder checkpoint.
+
+Deployments must allow enough graceful shutdown time for that drain and other
+server cleanup. On Railway, configure at least 60 seconds of draining time for
+the service before testing an app redeployment; the platform default is zero.
+This is a deployment prerequisite, not a fleet-default promotion. When upgrading
+from a release without the idle-session drain, park warm native sessions and
+verify their completed harness checkpoints before stopping the old app.
