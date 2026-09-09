@@ -1037,11 +1037,20 @@ function runtimePort(
     ...(runtime.setConfigOption
       ? {
           async setModel(model: string) {
-            await runtime.setConfigOption?.({
-              handle,
-              key: "model",
-              value: model,
-            });
+            // Loading a persisted session can leave its provider unstarted.
+            // ACP config selection may start it before the first prompt, so
+            // admit and verify that process just as we do for a resumed turn.
+            const finishOwnershipAdmission =
+              children.beginLifetimeOwnershipAdmission();
+            try {
+              await runtime.setConfigOption?.({
+                handle,
+                key: "model",
+                value: model,
+              });
+            } finally {
+              await finishOwnershipAdmission();
+            }
           },
         }
       : {}),

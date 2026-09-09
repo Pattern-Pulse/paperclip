@@ -104,6 +104,15 @@ whose cached handles still say running. Failure to stop a reusable sandbox is
 reported and retained for retry; it never falls back to deletion or orphan cleanup.
 This applies to both runner generations and leaves distinct task/user bindings
 isolated.
+If Daytona rejects a command because its cached shell session no longer exists,
+the provider creates one replacement session and retries within the original
+command deadline. This applies only to a confirmed rejection before dispatch;
+errors while polling or reading output never replay a potentially executed
+command. Concurrent callers share the replacement session.
+Native ACPX recovery also admits a provider started lazily by model selection.
+Selection waits for verified process ownership before accepting the configured
+model; cleanup and out-of-band process launches remain fenced. This matters
+when reopening a persisted Codex session after stopping its sandbox.
 The new scoped-shell startup setting is not added to an existing unscoped Codex
 session's protected launch arguments. Its durable provider profile remains
 unchanged during attachment.
