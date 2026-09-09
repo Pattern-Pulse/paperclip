@@ -19,6 +19,7 @@ import {
   providerSessionContinuityFailures,
 } from "./run-observations.js";
 import { resolveRunnerE2ESource } from "./source.js";
+import { readWarmWorkspaceFile } from "./warm-workspace.js";
 import {
   isPublicRunnerScreenshotRoute,
   PUBLIC_RUNNER_SCREENSHOT_MARKER,
@@ -1338,10 +1339,6 @@ for (const execution of executions) {
             `Warm fixture ${execution.task.id} is missing its project or follow-up messages`,
           );
         }
-        const workspaceFile = path.join(
-          workspacePath,
-          `daytona-warm-${nonce}.txt`,
-        );
         const turnEvidence: Array<Record<string, unknown>> = [];
         for (const completedTurn of [1, 2] as const) {
           const turnDeadlineAt = Math.min(
@@ -1376,10 +1373,16 @@ for (const execution of executions) {
             { length: completedTurn },
             (_, index) => `T${index + 1}-${nonce}`,
           ).join("\n")}\n`;
-          const hostContent = await readFile(workspaceFile, "utf8");
-          if (hostContent !== expectedPrefix) {
+          const fileObservation = await readWarmWorkspaceFile({
+            api,
+            run: sortRunsChronologically(waitingState.taskRuns).at(-1)!,
+            issueId: issue.id,
+            workspacePath,
+            filename: `daytona-warm-${nonce}.txt`,
+          });
+          if (fileObservation.content !== expectedPrefix) {
             throw new Error(
-              `Host workspace was not finalized after warm turn ${completedTurn}: expected ${JSON.stringify(expectedPrefix)}, observed ${JSON.stringify(hostContent)}`,
+              `Warm workspace was not finalized after turn ${completedTurn} (${fileObservation.source}): expected ${JSON.stringify(expectedPrefix)}, observed ${JSON.stringify(fileObservation.content)}`,
             );
           }
           if (
@@ -1475,7 +1478,7 @@ for (const execution of executions) {
             turn: completedTurn,
             issue: waitingState.currentIssue,
             run: chronologicalRuns.at(-1),
-            hostContent,
+            fileObservation,
             leases: completedLeases,
           });
           await page.goto(
@@ -1836,12 +1839,22 @@ for (const execution of executions) {
             )
             .map(async (matcher) => [
               matcher.path,
-              await readFile(
-                path.isAbsolute(matcher.path)
-                  ? matcher.path
-                  : path.join(workspacePath, matcher.path),
-                "utf8",
-              ).catch(() => undefined),
+              execution.task.flow === "warm_three_turn"
+                ? (
+                    await readWarmWorkspaceFile({
+                      api,
+                      run: finalRun,
+                      issueId: issue!.id,
+                      workspacePath,
+                      filename: matcher.path,
+                    })
+                  ).content
+                : await readFile(
+                    path.isAbsolute(matcher.path)
+                      ? matcher.path
+                      : path.join(workspacePath, matcher.path),
+                    "utf8",
+                  ).catch(() => undefined),
             ]),
         ),
       );

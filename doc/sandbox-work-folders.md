@@ -30,6 +30,13 @@ Credentials are not recorded in Playwright reports. These API checks supplement
 the required browser walkthrough, two real 180-second intervals, and recovery
 scenarios; passing them alone is not staging acceptance.
 
+The separate three-turn Daytona runner qualification writes into
+`PAPERCLIP_TASK_DIR` when the host supplies scoped folders. After each turn it
+checks that run's final save and reads the exact bytes through the task file API.
+It still checks the same sandbox, provider session, and ordered turn markers.
+Runs without a scoped manifest retain the existing host-workspace assertions.
+The test does not treat a missing host mirror as proof that a scoped file was lost.
+
 The staging matrix covers legacy Codex and Claude with both CLI and ACP,
 legacy OpenCode and Pi, and native Codex, OpenCode, and ACPX Claude/Codex/Pi.
 Cursor, Gemini, Grok, and Kimi are excluded from this acceptance campaign by
