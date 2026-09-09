@@ -31,6 +31,9 @@ export async function readWarmWorkspaceFile(input: {
   const fullRun = await api.get<
     typeof run & {
       contextSnapshot: Record<string, unknown> | null;
+      status: string;
+      startedAt: string | null;
+      finishedAt: string | null;
     }
   >(`/api/heartbeat-runs/${encodeURIComponent(run.id)}`);
   assert.equal(fullRun.id, run.id);
@@ -46,6 +49,7 @@ export async function readWarmWorkspaceFile(input: {
         !Array.isArray(fullRun.contextSnapshot)),
     "Invalid full run context",
   );
+  assert.equal(fullRun.status, "succeeded", "Warm turn must succeed");
   const manifest = fullRun.contextSnapshot?.paperclipWorkFolders;
   if (manifest === undefined || manifest === null) {
     return {
@@ -70,6 +74,20 @@ export async function readWarmWorkspaceFile(input: {
   assert(
     saved && saved.state === "saved" && !saved.active && saved.lastSavedAt,
     "The completed warm turn must have a successful final file save",
+  );
+  const startedAt = Date.parse(fullRun.startedAt ?? "");
+  const finishedAt = Date.parse(fullRun.finishedAt ?? "");
+  const finalizedAt = Date.parse(saved.finalCheckpointAt ?? "");
+  const savedAt = Date.parse(saved.lastSavedAt);
+  assert(
+    Number.isFinite(startedAt) &&
+      Number.isFinite(finishedAt) &&
+      Number.isFinite(finalizedAt) &&
+      Number.isFinite(savedAt) &&
+      startedAt <= finalizedAt &&
+      finalizedAt <= savedAt &&
+      savedAt <= finishedAt,
+    "Warm turn requires explicit finalization and save timestamps within this run",
   );
   const response = await api.request.get(
     `${base}/content?path=${encodeURIComponent(filename)}`,

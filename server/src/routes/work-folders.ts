@@ -95,6 +95,7 @@ export function workFolderRoutes(db: Db, provider?: StorageProvider) {
       const interrupted = !active && (row.state === "starting" || row.state === "saving");
       return { runId: row.runId, agentId: row.manifest.agentId, state: interrupted ? "failed" : row.state,
         lastSavedAt: row.lastSavedAt, error: interrupted ? row.error ?? "Run ended before its final file save completed." : row.error,
+        finalCheckpointAt: row.manifest.finalCheckpointAt ?? null,
         refreshRequested: row.refreshRequested, active };
     };
     const leases = new Set<string>();

@@ -66,3 +66,21 @@ it.each([
     expect.objectContaining({ runId: "saved-run", state: priorState, lastSavedAt: "2026-09-08T12:00:00.000Z" }),
   ]);
 });
+
+it.each([undefined, "2026-09-09T04:00:00.000Z"])(
+  "distinguishes periodic saves from explicit finalization (%s)",
+  async (finalCheckpointAt) => {
+    const saved = {
+      folderRun: { runId: "run", manifest: { agentId: "agent", sandboxKey: "sandbox", finalCheckpointAt },
+        state: "saved", lastSavedAt: new Date("2026-09-09T04:00:00Z"), error: null, refreshRequested: false },
+      status: "succeeded",
+    };
+    const query = { from: () => query, innerJoin: () => query, where: () => query,
+      orderBy: () => query, limit: async () => [saved] };
+    const app = express();
+    app.use("/api", workFolderRoutes({ select: () => query } as unknown as Db));
+    const response = await request(app).get("/api/companies/11111111-1111-4111-8111-111111111111/work-folders/task/22222222-2222-4222-8222-222222222222/sync").expect(200);
+    expect(response.body).toEqual([expect.objectContaining({ runId: "run", state: "saved", active: false,
+      lastSavedAt: "2026-09-09T04:00:00.000Z", finalCheckpointAt: finalCheckpointAt ?? null })]);
+  },
+);

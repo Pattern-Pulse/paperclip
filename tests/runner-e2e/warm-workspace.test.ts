@@ -34,6 +34,7 @@ async function fixture() {
     state: "saved",
     active: false,
     lastSavedAt: "2026-09-09T04:00:00Z",
+    finalCheckpointAt: "2026-09-09T04:00:00Z" as string | null | undefined,
   };
   const response = {
     ok: () => true,
@@ -44,6 +45,9 @@ async function fixture() {
     id: "run",
     companyId: "company",
     agentId: "agent",
+    status: "succeeded",
+    startedAt: "2026-09-09T03:59:00Z" as string | null,
+    finishedAt: "2026-09-09T04:00:01Z" as string | null,
     contextSnapshot: { paperclipWorkFolders: binding } as Record<
       string,
       unknown
@@ -199,6 +203,50 @@ describe("warm workspace persistence observation", () => {
     expect(input.api.get).toHaveBeenCalledTimes(1);
     expect(input.api.request.get).not.toHaveBeenCalled();
   });
+
+  it.each(["failed", "cancelled", "timed_out", "running"])(
+    "rejects a %s run even when its periodic checkpoint is saved",
+    async (status) => {
+      const { input, fullRun } = await fixture();
+      fullRun.status = status;
+      await expect(readWarmWorkspaceFile(input)).rejects.toThrow(
+        "Warm turn must succeed",
+      );
+      expect(input.api.request.get).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { finalCheckpointAt: undefined },
+    { finalCheckpointAt: null },
+    { finalCheckpointAt: "invalid" },
+    { finalCheckpointAt: "2026-09-09T03:58:59Z" },
+    { finalCheckpointAt: "2026-09-09T04:00:02Z" },
+    { lastSavedAt: "2026-09-09T03:59:59Z" },
+    { lastSavedAt: "2026-09-09T04:00:02Z" },
+  ])(
+    "rejects periodic-only or unrelated finalization evidence: %j",
+    async (override) => {
+      const { input, saved } = await fixture();
+      Object.assign(saved, override);
+      await expect(readWarmWorkspaceFile(input)).rejects.toThrow(
+        "explicit finalization",
+      );
+      expect(input.api.request.get).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["startedAt", "finishedAt"] as const)(
+    "rejects missing run boundary %s",
+    async (field) => {
+      const { input, fullRun } = await fixture();
+      fullRun[field] = null;
+      await expect(readWarmWorkspaceFile(input)).rejects.toThrow(
+        "explicit finalization",
+      );
+      expect(input.api.request.get).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { runId: "older-run" },

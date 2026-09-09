@@ -37,6 +37,8 @@ export interface WorkFolderSyncStatus {
   agentId?: string;
   state: "starting" | "saved" | "saving" | "failed";
   lastSavedAt: string | null;
+  /** Successful run finalization; absent on older servers and periodic-only saves. */
+  finalCheckpointAt?: string | null;
   error: string | null;
   refreshRequested: boolean;
   active: boolean;

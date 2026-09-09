@@ -361,7 +361,10 @@ at version 2 so existing native session backups remain restorable.
 Warm continuity qualification reads the full run record before selecting the
 persistence contract; company run listings omit the scoped-folder manifest.
 Each completed scoped turn must have its own successful final save before the
-harness reads cached bytes. Legacy host-workspace fallback is used only when
+harness reads cached bytes. The sync API exposes `finalCheckpointAt` from the
+run manifest, distinct from periodic `lastSavedAt`. Qualification requires a
+successful terminal run and finalization/save timestamps within that run; a
+periodic save cannot substitute for completed finalization. Legacy host-workspace fallback is used only when
 the full run record has no scoped manifest.
 
 The three-turn fixture supplies a shell script that compares exact bytes before
