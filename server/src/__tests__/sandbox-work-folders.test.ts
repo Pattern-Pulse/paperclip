@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
@@ -68,6 +68,16 @@ describe("shared sandbox work-folder lifecycle", () => {
       executionWorkspaceId: null, executionWorkspacePreference: null,
       environment: { id: environmentId, driver: "sandbox" as const, config: { reuseLease: true } } };
     expect(await findUnboundLegacyTaskWorkspace(db, input)).toBe(workspaceId);
+    const malformedIds = Array.from({ length: adapterType === "codex_local" ? 101 : 1 }, () => randomUUID());
+    await db.insert(environmentLeases).values(malformedIds.map((id) => ({ id, companyId, environmentId, issueId: task,
+      executionWorkspaceId: workspaceId, heartbeatRunId: runId, status: "retained", leasePolicy: "reuse_by_environment",
+      provider: "daytona", providerLeaseId: "invalid-newer-sandbox", createdAt: new Date(Date.now() + 1000),
+      metadata: { ...metadata, reusableSandboxLease: { ...metadata.reusableSandboxLease, executionWorkspaceId: randomUUID() } } })));
+    await db.update(environmentLeases).set({ createdAt: sql`'2026-01-01T00:00:00.123455Z'::timestamptz` }).where(eq(environmentLeases.id, leaseId));
+    await db.update(environmentLeases).set({ createdAt: sql`'2026-01-01T00:00:00.123456Z'::timestamptz` }).where(inArray(environmentLeases.id, malformedIds));
+    // Includes a second page: validate identities before selecting a candidate.
+    expect(await findUnboundLegacyTaskWorkspace(db, input)).toBe(workspaceId);
+    await db.delete(environmentLeases).where(inArray(environmentLeases.id, malformedIds));
     for (const bad of [{ companyId: randomUUID() }, { issueId: randomUUID() }, { projectId: randomUUID() },
       { agentId: randomUUID() }, { responsibleUserId: null }, { responsibleUserId: "another-user" },
       { adapterType: "other-adapter" }, { executionWorkspaceId: randomUUID() },
@@ -185,12 +195,14 @@ describe("shared sandbox work-folder lifecycle", () => {
   }, 120_000);
 
   it("retains unaudited edits and retries without misreporting a completed checkpoint", async () => {
-    const run = await prepare(path.join(root, "activity-failure"), randomUUID());
+    const physicalId = randomUUID();
+    const run = await prepare(path.join(root, "activity-failure"), physicalId);
+    let completingRun = run;
     await run.flush();
     const [before] = await db.select().from(workFolderRuns).where(eq(workFolderRuns.runId, run.manifest.runId));
     await fs.writeFile(path.join(run.home, "task/activity-proof.txt"), "saved after logging recovers");
     const beforeCompletion = vi.fn(async () => {
-      const [state] = await db.select().from(workFolderRuns).where(eq(workFolderRuns.runId, run.manifest.runId));
+      const [state] = await db.select().from(workFolderRuns).where(eq(workFolderRuns.runId, completingRun.manifest.runId));
       expect(state?.state).toBe("saved");
       expect(state?.manifest.finalCheckpointAt).toBeUndefined();
       const folder = await workFolderService(db, storage).ensure({ companyId, scope: "task", ownerId: taskId });
@@ -207,14 +219,32 @@ describe("shared sandbox work-folder lifecycle", () => {
       expect((await workFolderService(db, storage).list(folder)).files.some((file) => file.path === "activity-proof.txt")).toBe(false);
       expect(await fs.readFile(path.join(run.home, "task/activity-proof.txt"), "utf8")).toBe("saved after logging recovers");
     } finally { activity.mockRestore(); }
-    await run.stop(beforeCompletion); active.splice(active.indexOf(run), 1);
+    await expect(run.stop(beforeCompletion)).rejects.toThrow("activity unavailable");
+    active.splice(active.indexOf(run), 1);
+    completingRun = await prepare(run.home, randomUUID(), physicalId);
+    await completingRun.stop(beforeCompletion); active.splice(active.indexOf(completingRun), 1);
     expect(beforeCompletion).toHaveBeenCalledTimes(1);
-    const [saved] = await db.select().from(workFolderRuns).where(eq(workFolderRuns.runId, run.manifest.runId));
+    const [saved] = await db.select().from(workFolderRuns).where(eq(workFolderRuns.runId, completingRun.manifest.runId));
     expect(saved?.state).toBe("saved");
     expect(saved?.manifest.finalCheckpointAt).toBeTruthy();
     expect(saved!.lastSavedAt!.getTime()).toBeGreaterThan(before!.lastSavedAt!.getTime());
     const folder = await workFolderService(db, storage).ensure({ companyId, scope: "task", ownerId: taskId });
     expect((await workFolderService(db, storage).list(folder)).files.some((file) => file.path === "activity-proof.txt")).toBe(true);
+  }, 120_000);
+
+  it("does not repeat failed post-save finalization during teardown", async () => {
+    const run = await prepare(path.join(root, "completion-failure"), randomUUID());
+    const finish = vi.fn().mockRejectedValueOnce(new Error("session persistence unavailable")).mockResolvedValue(undefined);
+    const stopped = run.stop(finish);
+    await expect(stopped).rejects.toThrow("session persistence unavailable");
+    expect(run.stop(finish)).toBe(stopped);
+    await expect(run.stop(finish)).rejects.toThrow("session persistence unavailable");
+    expect(finish).toHaveBeenCalledTimes(1);
+    const [state] = await db.select().from(workFolderRuns).where(eq(workFolderRuns.runId, run.manifest.runId));
+    expect(state?.state).toBe("saved");
+    expect(state?.lastSavedAt).toBeTruthy();
+    expect(state?.manifest.finalCheckpointAt).toBeUndefined();
+    active.splice(active.indexOf(run), 1);
   }, 120_000);
 
   it("reuses clones and restores saved unpushed work, staged changes, and task files after losing the sandbox", async () => {
@@ -310,10 +340,14 @@ describe("shared sandbox work-folder lifecycle", () => {
     expect((await svc.list(folder)).files).toHaveLength(0);
     expect(await fs.readFile(path.join(run.home, "user/private"), "utf8")).toBe("pending private edit");
     await db.update(companyMemberships).set({ status: "active" }).where(eq(companyMemberships.id, membership!.id));
-    await run.stop(); active.splice(active.indexOf(run), 1);
+    await expect(run.stop()).rejects.toThrow("no longer authorized");
+    active.splice(active.indexOf(run), 1);
+    const retry = await prepare(run.home, randomUUID(), leaseId, userId);
+    await retry.stop(); active.splice(active.indexOf(retry), 1);
+    expect((await svc.list(folder)).files.map((file) => file.path)).toContain("private");
   }, 120_000);
 
-  it("does not publish a partial repository checkpoint and retries a failed final save", async () => {
+  it("does not publish a partial repository checkpoint and recovers a failed final save in a new run", async () => {
     const leaseId = randomUUID();
     const run = await prepare(path.join(root, "interrupted-checkpoint"), leaseId);
     await run.flush();
@@ -331,7 +365,10 @@ describe("shared sandbox work-folder lifecycle", () => {
       expect(after!.checkpointKey).toBe(before!.checkpointKey);
       expect(await retainUnsavedWorkFolderLease(db, { id: leaseId, companyId })).toBe(true);
     } finally { fail.mockRestore(); }
-    await run.stop(); active.splice(active.indexOf(run), 1);
+    await expect(run.stop()).rejects.toThrow("Injected storage outage");
+    active.splice(active.indexOf(run), 1);
+    const retry = await prepare(run.home, randomUUID(), leaseId);
+    await retry.stop(); active.splice(active.indexOf(retry), 1);
     await fs.rm(run.home, { recursive: true });
     const recovered = await prepare(path.join(root, "interrupted-recovered"), randomUUID());
     expect(await fs.readFile(path.join(recovered.primaryRepo, "new-unsaved-file"), "utf8")).toBe("must survive a failed save");

@@ -21,35 +21,46 @@ export async function findUnboundLegacyTaskWorkspace(db: Db, input: {
 }) {
   if (!input.issueId || !input.projectId || input.executionWorkspaceId || input.executionWorkspacePreference
     || input.environment?.driver !== "sandbox" || input.environment.config.reuseLease !== true) return null;
-  const [candidate] = await db.select({ lease: environmentLeases }).from(environmentLeases)
-    .innerJoin(heartbeatRuns, and(eq(heartbeatRuns.id, environmentLeases.heartbeatRunId),
-      eq(heartbeatRuns.companyId, environmentLeases.companyId)))
-    .innerJoin(executionWorkspaces, and(eq(executionWorkspaces.id, environmentLeases.executionWorkspaceId),
-      eq(executionWorkspaces.companyId, environmentLeases.companyId)))
-    .where(and(eq(environmentLeases.companyId, input.companyId), eq(environmentLeases.issueId, input.issueId),
-      eq(environmentLeases.environmentId, input.environment.id),
-      eq(environmentLeases.leasePolicy, "reuse_by_environment"),
-      inArray(environmentLeases.status, ["retained", "released"]),
-      isNotNull(environmentLeases.providerLeaseId),
-      sql`${environmentLeases.metadata}->>'driver' = 'sandbox'`,
-      sql`${environmentLeases.metadata}->>'workFolderLayout' is distinct from 'scoped'`,
-      sql`${environmentLeases.metadata}->'reusableSandboxLease'->>'version' = '1'`,
-      eq(heartbeatRuns.agentId, input.agentId),
-      input.responsibleUserId === null ? isNull(heartbeatRuns.responsibleUserId)
-        : eq(heartbeatRuns.responsibleUserId, input.responsibleUserId),
-      eq(executionWorkspaces.projectId, input.projectId), eq(executionWorkspaces.status, "active"),
-      or(isNull(executionWorkspaces.sourceIssueId), eq(executionWorkspaces.sourceIssueId, input.issueId)),
-      notExists(db.select({ id: workFolderRuns.runId }).from(workFolderRuns).where(and(
-        eq(workFolderRuns.companyId, input.companyId), sql`${workFolderRuns.manifest}->>'taskId' = ${input.issueId}`)))))
-    .orderBy(desc(environmentLeases.createdAt), desc(environmentLeases.id)).limit(1);
-  if (!candidate) return null;
-  const lease = await bindLegacySandboxIdentity(db, candidate.lease as EnvironmentLease);
-  const scope = record(lease.metadata?.reusableSandboxLease);
-  if (scope?.version !== 2 || scope.issueId !== input.issueId || scope.responsibleUserId !== input.responsibleUserId
-    || scope.adapterType !== input.adapterType || scope.environmentId !== input.environment.id
-    || scope.executionWorkspaceId !== lease.executionWorkspaceId) return null;
-  // Normal workspace freshness and provider sentinel checks still run before use.
-  return lease.executionWorkspaceId;
+  let before: { createdAt: string; id: string } | undefined;
+  while (true) {
+    const candidates = await db.select({ lease: environmentLeases,
+      createdAt: sql<string>`${environmentLeases.createdAt}::text` }).from(environmentLeases)
+      .innerJoin(heartbeatRuns, and(eq(heartbeatRuns.id, environmentLeases.heartbeatRunId),
+        eq(heartbeatRuns.companyId, environmentLeases.companyId)))
+      .innerJoin(executionWorkspaces, and(eq(executionWorkspaces.id, environmentLeases.executionWorkspaceId),
+        eq(executionWorkspaces.companyId, environmentLeases.companyId)))
+      .where(and(eq(environmentLeases.companyId, input.companyId), eq(environmentLeases.issueId, input.issueId),
+        before ? sql`(${environmentLeases.createdAt}, ${environmentLeases.id}) < (${before.createdAt}::timestamptz, ${before.id}::uuid)` : undefined,
+        eq(environmentLeases.environmentId, input.environment.id),
+        eq(environmentLeases.leasePolicy, "reuse_by_environment"),
+        inArray(environmentLeases.status, ["retained", "released"]),
+        isNotNull(environmentLeases.providerLeaseId),
+        sql`${environmentLeases.metadata}->>'driver' = 'sandbox'`,
+        sql`${environmentLeases.metadata}->>'workFolderLayout' is distinct from 'scoped'`,
+        sql`${environmentLeases.metadata}->'reusableSandboxLease'->>'version' = '1'`,
+        eq(heartbeatRuns.agentId, input.agentId),
+        input.responsibleUserId === null ? isNull(heartbeatRuns.responsibleUserId)
+          : eq(heartbeatRuns.responsibleUserId, input.responsibleUserId),
+        eq(executionWorkspaces.projectId, input.projectId), eq(executionWorkspaces.status, "active"),
+        or(isNull(executionWorkspaces.sourceIssueId), eq(executionWorkspaces.sourceIssueId, input.issueId)),
+        notExists(db.select({ id: workFolderRuns.runId }).from(workFolderRuns).where(and(
+          eq(workFolderRuns.companyId, input.companyId), sql`${workFolderRuns.manifest}->>'taskId' = ${input.issueId}`)))))
+      .orderBy(desc(environmentLeases.createdAt), desc(environmentLeases.id)).limit(100);
+    if (!candidates.length) return null;
+    for (const candidate of candidates) {
+      const lease = await bindLegacySandboxIdentity(db, candidate.lease as EnvironmentLease);
+      const scope = record(lease.metadata?.reusableSandboxLease);
+      if (scope?.version !== 2 || scope.issueId !== input.issueId || scope.responsibleUserId !== input.responsibleUserId
+        || scope.adapterType !== input.adapterType || scope.environmentId !== input.environment.id
+        || scope.executionWorkspaceId !== lease.executionWorkspaceId) continue;
+      // Normal workspace freshness and provider sentinel checks still run before use.
+      return lease.executionWorkspaceId;
+    }
+    // Invalid newer lease records must not hide an older recoverable workspace.
+    // Keep Postgres microseconds intact across page boundaries.
+    const last = candidates[candidates.length - 1]!;
+    before = { createdAt: last.createdAt, id: last.lease.id };
+  }
 }
 
 /** Keep the old sync/restore contract even after its provider sandbox expires. */

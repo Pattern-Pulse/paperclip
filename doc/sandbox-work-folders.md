@@ -2,6 +2,11 @@
 
 Shared folders can contain saved files from several sandboxes. The cached-file inspector keeps earlier run failures visible with a **View failed run** link, separately from the last successful save time and direct file-operation errors.
 
+Finalization runs once per execution, including its file flush and session-state
+publication. Repeated error cleanup keeps the original failure visible. A later
+authorized run recovers unsaved edits from the retained sandbox before loading
+incoming shared files; it does not rewrite the failed run as successful.
+
 The deployed acceptance entry point is `pnpm test:e2e:work-folders:deployed`.
 Set `PAPERCLIP_DEPLOYED_STACK_MANIFEST` to a JSON manifest matching
 `tests/runner-e2e/deployed-stack.ts`, `PAPERCLIP_DEPLOYED_STACK_AUTH` to a private
