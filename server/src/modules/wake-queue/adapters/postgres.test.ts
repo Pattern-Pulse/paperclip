@@ -48,9 +48,11 @@ describeEmbeddedPostgres("wake-queue postgres adapter", () => {
 
   afterEach(async () => {
     await db.delete(issueComments);
+    // `heartbeat_runs.wakeup_request_id` references `agent_wakeup_requests.id`,
+    // so the run row must go first.
+    await db.delete(heartbeatRuns);
     await db.delete(agentWakeupRequests);
     await db.delete(issues);
-    await db.delete(heartbeatRuns);
     await db.delete(agents);
     await db.delete(companies);
   });
@@ -161,7 +163,9 @@ describeEmbeddedPostgres("wake-queue postgres adapter", () => {
     const foreignAgentId = await seedAgent({ companyId: otherCompanyId });
     const finishingAgentId = await seedAgent({ companyId });
     const issueId = await seedIssue({ companyId, assigneeAgentId: finishingAgentId, status: "in_progress" });
-    const runId = await seedRun({ companyId, agentId: finishingAgentId, contextSnapshot: { issueId } });
+    // A finishing run status other than the legacy-reconciliation set (failed,
+    // timed_out, interrupted, cancelled) reaches the module's own drain logic.
+    const runId = await seedRun({ companyId, agentId: finishingAgentId, contextSnapshot: { issueId }, status: "succeeded" });
     await db.update(issues).set({ executionRunId: runId }).where(eq(issues.id, issueId));
     const wakeId = await seedDeferredWake({ companyId, agentId: foreignAgentId, issueId });
 
@@ -197,7 +201,11 @@ describeEmbeddedPostgres("wake-queue postgres adapter", () => {
 
     const adapter = createPostgresWakeQueueAdapter(db, stubDeps);
     await adapter.withIssueExecutionLock(
-      { companyId, runId: (await seedRun({ companyId, agentId, contextSnapshot: { issueId } })), now: new Date() },
+      {
+        companyId,
+        runId: (await seedRun({ companyId, agentId, contextSnapshot: { issueId }, status: "succeeded" })),
+        now: new Date(),
+      },
       async (_locked, ports) => {
         const cancelledUnderWrongCompany = await ports.writer.cancelDeferredWake({
           companyId: otherCompanyId,
@@ -233,34 +241,20 @@ describeEmbeddedPostgres("wake-queue postgres adapter", () => {
   });
 
   // Review test (c): a deferred-status compare-and-set that affects no row
-  // rolls the transaction back, and creates no run and no issue lock.
-  it("rolls back the promotion when the deferred-status compare-and-set loses the race", async () => {
+  // claims nothing, and no other write in the promotion path ever runs.
+  it("fails the promotion claim when the deferred-status compare-and-set loses the race, before any other write", async () => {
     const companyId = await seedCompany();
     const agentId = await seedAgent({ companyId });
     const issueId = await seedIssue({ companyId, assigneeAgentId: agentId });
     const wakeId = await seedDeferredWake({ companyId, agentId, issueId });
-    // A concurrent finalization already claimed this wake before the promote write runs.
+    // A concurrent finalization already claimed this wake before the promotion claim runs.
     await db.update(agentWakeupRequests).set({ status: "cancelled" }).where(eq(agentWakeupRequests.id, wakeId));
 
     const adapter = createPostgresWakeQueueAdapter(db, stubDeps);
-    const runId = await seedRun({ companyId, agentId, contextSnapshot: { issueId } });
-    const result = await adapter.withIssueExecutionLock({ companyId, runId, now: new Date() }, async (locked, ports) => {
-      const promoted = await ports.writer.promoteDeferredWake({
-        companyId,
-        wakeId,
-        deferredAgent: { id: agentId, companyId, name: "CodexCoder", invokable: true },
-        issue: locked.primaryIssue,
-        finishingRun: locked.run,
-        contextSnapshot: { issueId },
-        reason: "issue_execution_promoted",
-        source: "automation",
-        triggerDetail: null,
-        payload: {},
-        responsibleUserId: "responsible-user",
-        sessionBefore: null,
-        now: new Date(),
-      });
-      expect(promoted).toBeNull();
+    const runId = await seedRun({ companyId, agentId, contextSnapshot: { issueId }, status: "succeeded" });
+    const result = await adapter.withIssueExecutionLock({ companyId, runId, now: new Date() }, async (_locked, ports) => {
+      const claimed = await ports.writer.claimDeferredWakeForPromotion({ companyId, wakeId, now: new Date() });
+      expect(claimed).toBe(false);
       return { outcome: { kind: "released" as const }, postCommitEffects: [] };
     });
     expect(result.outcome.kind).toBe("released");
@@ -270,6 +264,70 @@ describeEmbeddedPostgres("wake-queue postgres adapter", () => {
     expect(runs[0]!.id).toBe(runId);
     const issueRow = (await db.select().from(issues).where(eq(issues.id, issueId)))[0];
     expect(issueRow?.executionRunId).toBeNull();
+    const wakeRow = (await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, wakeId)))[0];
+    expect(wakeRow?.status).toBe("cancelled");
+  });
+
+  // `finalizePromotedWake`'s own writes guard against clobbering state a
+  // concurrent write already changed: it never takes the issue's execution
+  // lock away from a run that already holds it, and it never overwrites a
+  // `runId` a wake row already carries. Both guards only matter as defense
+  // in depth today (the release drain calls this at most once per
+  // transaction), so this drives the port directly to prove the SQL itself,
+  // independent of that call pattern.
+  it("guards finalizePromotedWake's own writes against clobbering an already-set execution lock or runId", async () => {
+    const companyId = await seedCompany();
+    const agentId = await seedAgent({ companyId });
+    const issueId = await seedIssue({ companyId, assigneeAgentId: agentId });
+    const wakeIdA = await seedDeferredWake({ companyId, agentId, issueId });
+    const wakeIdB = await seedDeferredWake({ companyId, agentId, issueId });
+    const runId = await seedRun({ companyId, agentId, contextSnapshot: { issueId }, status: "succeeded" });
+    const deferredAgent = { id: agentId, companyId, name: "CodexCoder", invokable: true };
+
+    const finalizedRunIds: string[] = [];
+    const adapter = createPostgresWakeQueueAdapter(db, stubDeps);
+    await adapter.withIssueExecutionLock({ companyId, runId, now: new Date() }, async (locked, ports) => {
+      const finalize = async (wakeId: string) => {
+        const promoted = await ports.writer.finalizePromotedWake({
+          companyId,
+          wakeId,
+          deferredAgent,
+          issue: locked.primaryIssue,
+          finishingRun: locked.run,
+          contextSnapshot: { issueId },
+          reason: "issue_execution_promoted",
+          source: "automation",
+          triggerDetail: null,
+          payload: {},
+          responsibleUserId: "responsible-user",
+          sessionBefore: null,
+          now: new Date(),
+        });
+        finalizedRunIds.push(promoted.id);
+      };
+      // The issue's execution lock is free; this call takes it.
+      await finalize(wakeIdA);
+      // The issue's execution lock is already held by the first call's run,
+      // so this call's issue-lock write must no-op even though a run is
+      // still created.
+      await finalize(wakeIdB);
+      // Repeating the same wake must not overwrite its now-set `runId`.
+      await finalize(wakeIdA);
+      return { outcome: { kind: "released" as const }, postCommitEffects: [] };
+    });
+    const [runA, runB, runC] = finalizedRunIds;
+
+    const wakeRowA = (await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, wakeIdA)))[0];
+    const wakeRowB = (await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, wakeIdB)))[0];
+    expect(wakeRowA?.runId).toBe(runA);
+    expect(wakeRowB?.runId).toBe(runB);
+    const issueRow = (await db.select().from(issues).where(eq(issues.id, issueId)))[0];
+    expect(issueRow?.executionRunId).toBe(runA);
+    expect(issueRow?.executionRunId).not.toBe(runB);
+    expect(issueRow?.executionRunId).not.toBe(runC);
+    const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId, companyId));
+    // All three finalize calls each still insert their own run row.
+    expect(runs.map((run) => run.id).sort()).toEqual([runId, runA, runB, runC].sort());
   });
 
   it("locks the context issue and every sibling issue in id order, and two concurrent releases do not deadlock", async () => {

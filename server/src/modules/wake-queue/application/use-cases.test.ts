@@ -36,6 +36,10 @@ const ISSUE: IssueSnapshot = {
   originKind: null,
   monitorNextCheckAt: null,
   executionState: null,
+  responsibleUserId: null,
+  parentId: null,
+  originId: null,
+  originRunId: null,
 };
 
 const AGENT: InvokableAgentSnapshot = {
@@ -104,7 +108,8 @@ function createFakeWriter(overrides: Partial<WakeQueueWriter> = {}): WakeQueueWr
     })),
     getCommentSelfAuthorship: vi.fn(async () => ({ allSelfAuthored: false })),
     reopenIssue: vi.fn(async () => null),
-    promoteDeferredWake: vi.fn(async (input) => runSummary(input.wakeId)),
+    claimDeferredWakeForPromotion: vi.fn(async () => true),
+    finalizePromotedWake: vi.fn(async (input) => runSummary(input.wakeId)),
     hasExistingExecutionPath: vi.fn(async () => false),
     hasExplicitBlockerPath: vi.fn(async () => false),
     isAutomaticRecoverySuppressedByPauseHold: vi.fn(async () => false),
@@ -171,7 +176,7 @@ describe("releaseIssueExecution", () => {
       // cancel_empty: queued comments, none live, no independent continuation.
       wakeCandidate({ id: "wake-cancel", queuedCommentIds: ["c1"] }),
       // fail_not_invokable: agent lookup misses for this one wake only.
-      wakeCandidate({ id: "wake-fail" }),
+      wakeCandidate({ id: "wake-fail", agentId: "uninvokable-agent" }),
       // normalize: queued comments differ from the live set, then promotes.
       wakeCandidate({ id: "wake-normalize", queuedCommentIds: ["c1", "c2"] }),
     ];
@@ -210,6 +215,39 @@ describe("releaseIssueExecution", () => {
     expect(result.postCommitEffects).toEqual([{ kind: "run_queued", run: runSummary("wake-1") }]);
     expect(recovery.escalateStrandedAssignedIssue).not.toHaveBeenCalled();
     expect(recovery.escalateStrandedRecoveryIssueInPlace).not.toHaveBeenCalled();
+  });
+
+  it("never reopens the issue when the promotion claim loses the race, and moves on to the next wake", async () => {
+    const doneIssue: IssueSnapshot = { ...ISSUE, status: "done" };
+    const queue = [
+      // Carries a comment that would reopen the done issue, but the
+      // promotion claim below loses the race before that reopen can run.
+      wakeCandidate({
+        id: "wake-lost-race",
+        deferredCommentIds: ["c1"],
+        requestedByActorType: "user",
+      }),
+      wakeCandidate({ id: "wake-promotes" }),
+    ];
+    const claimNextDeferredWake = vi.fn(async () => queue.shift() ?? null);
+    const claimDeferredWakeForPromotion = vi.fn(async ({ wakeId }: { wakeId: string }) => wakeId !== "wake-lost-race");
+    const reopenIssue = vi.fn(async () => null);
+    const writer = createFakeWriter({ claimNextDeferredWake, claimDeferredWakeForPromotion, reopenIssue });
+    const reader = createFakeReader();
+    const issueLock: IssueLockWriter = {
+      withIssueExecutionLock: vi.fn(async (_input, fn) => {
+        const result = await fn({ primaryIssue: doneIssue, run: RUN }, { reader, writer });
+        return { ...result, run: RUN };
+      }),
+    };
+    const releaseIssueExecution = createReleaseIssueExecution({ issueLock, recovery: createFakeRecovery() });
+
+    const result = await releaseIssueExecution({ companyId: "company-1", runId: "run-1", now: new Date() });
+
+    expect(reopenIssue).not.toHaveBeenCalled();
+    expect(claimDeferredWakeForPromotion).toHaveBeenCalledTimes(2);
+    expect(result.outcome.kind).toBe("promoted");
+    expect(result.postCommitEffects).toEqual([{ kind: "run_queued", run: runSummary("wake-promotes") }]);
   });
 
   it("throws WakeQueueApplicationError with code responsible_user_unresolved when the responsible user cannot resolve", async () => {
