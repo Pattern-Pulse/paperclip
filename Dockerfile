@@ -133,6 +133,11 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 COPY --chown=node:node --from=build /app /app
 
+# The server vendors the runner into its own dist tree.  Keep runner runtime
+# imports resolvable from that tree in the production image; a dependency that
+# exists only in the workspace package is not reachable after vendoring.
+RUN node -e "require.resolve('smol-toml', { paths: ['/app/server/dist/vendor/paperclip-runner/drivers/codex'] })"
+
 ENV NODE_ENV=production \
   HOME=/paperclip \
   HOST=0.0.0.0 \
