@@ -1,7 +1,7 @@
 # AgentOS runtime callback receiver
 
-Status: implemented in the Paperclip bridge worktree; deployment remains a
-separate release decision.
+Status: implemented, pushed, and installed in the Paperclip app container;
+the status-mutating AgentOS runtime E2E remains a separate controlled gate.
 
 ## Purpose
 
@@ -62,24 +62,52 @@ AgentOS runtime execution disabled until both sides are deployed and the
 signed POST, replay, GET receipt, and final status projection have been
 verified.
 
-## Pattern & Pulse image publication (2026-09-10)
+## Pattern & Pulse image publication and host cutover (2026-09-10)
 
 The Pattern-Pulse organization keeps its Actions policy in `selected` mode;
-the upstream Paperclip workflows therefore cannot start because they reference
-unapproved marketplace actions. The repository now contains the narrowly
-scoped `.github/workflows/pattern-pulse-container.yml` fallback. It uses only
-the GitHub-owned `actions/checkout@v7`, builds the `production` target for the
-amd64 host, and publishes a full-commit-SHA tag to GHCR. The workflow was
-independently reviewed and passed on commit
-`de655b44747b9088bfe40a7c0a8676a99bd3cdac` (run `34414562754`), including a
-strict digest readback:
-`ghcr.io/pattern-pulse/paperclip:sha-de655b44747b9088bfe40a7c0a8676a99bd3cdac@sha256:cd5ba5cf090949a33210377fe90e77588b5d8b451c5510486a4ac50c4c082f3a`.
+the upstream Paperclip workflows therefore stop at `startup_failure` because
+they reference unapproved marketplace actions. The repository contains the
+narrowly scoped `.github/workflows/pattern-pulse-container.yml` fallback. It
+uses only GitHub-owned `actions/checkout@v7`, builds the `production` target
+for the amd64 host, and publishes a full-commit-SHA tag to GHCR.
 
-The host cutover is intentionally still open. The package is not anonymously
-pullable (`ghcr.io` returned HTTP 401), the current GitHub token lacks
-`read:packages`, and the host has no Docker registry credentials. The running
-host remains on the upstream Paperclip image; neither the Paperclip database
-nor callback environment was changed. Install the image only after a
-least-privilege read credential or an explicitly approved package-visibility
-decision is available, then perform a Paperclip-app-only recreate and the
-signed callback E2E.
+The fork is now on `master` at
+`2e053f5054b8e3406e6597b58b03f47287f5883c`, including the upstream sync
+commits `9581a9af0` and `99f5afdd9` plus the packaging fix that makes
+`smol-toml` a direct server runtime dependency. The independent code and
+workflow review is PASS. The fallback workflow passed as run
+`34421638580`, with strict digest readback:
+`ghcr.io/pattern-pulse/paperclip:sha-2e053f5054b8e3406e6597b58b03f47287f5883c@sha256:5d32565c27ac39e4ae4f78df35d3fe6f70f13fa5046bf34fa82b9acb4b055212`.
+
+Because GHCR remains private (`401` anonymously; the current GitHub token has
+no `read:packages`, and the host has no registry credentials), the host cutover
+used a local, content-addressed Docker archive instead of a registry pull. The
+archive SHA-256 is
+`69c7cc8b7c50b6c2ff6743e355ecd224d06100a00fabc4a3d99fd747f4d90edc`; the
+loaded image ID is
+`sha256:00944112cf96efd8e9ab647f44c9a27c57795c120651f1d6983a465042551ff6`,
+and its build-info commit is the fork HEAD above. The image passed both the
+production Docker `require.resolve` guard and a real ESM import smoke from the
+vendored runner path. Only `agentos-paperclip-app` was recreated; it is
+`running healthy` with restart count `0`, the PostgreSQL container ID is
+unchanged, and Plane/AgentOS containers were untouched.
+
+The callback environment is now present in the Paperclip app, but the AgentOS
+runtime gateway/execution flags remain disabled. Live read-only acceptance is
+proved by `/api/health` returning the exact build commit, an unauthenticated
+empty-body callback returning `401 callback_unauthorized`, and a correctly
+signed callback for an unknown run returning `404 run_not_found` without a
+write. A terminal-only database state
+currently has no queued/running run, so a real status-mutating callback E2E is
+still a separate controlled gate; do not claim the full Paperclip-to-AgentOS
+runtime loop is live until that gate is executed.
+
+### Cutover incident and recovery chronology
+
+The first app-only cutover on `99f5afdd9` failed during container startup:
+the production image could not resolve `smol-toml` from the vendored Codex
+runner path. The host was immediately rolled back to the prior official
+Paperclip image; app health, restart count, and the PostgreSQL container
+identity returned to the pre-cutover state. Commit `2e053f505` then made the
+server runtime dependency explicit, passed the production resolve guard and a
+real ESM import smoke, and was installed only after that evidence was green.
