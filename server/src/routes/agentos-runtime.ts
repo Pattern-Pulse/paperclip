@@ -257,6 +257,40 @@ export function agentosRuntimeCallbackRoutes(db: Db, env: NodeJS.ProcessEnv = pr
     if (!callback || callback.attempt !== attempt) return reject(res, 404, "callback_not_found");
     return res.json(receipt(callback));
   });
+
+  // The normal heartbeat-run endpoint is board/session authenticated and may
+  // redact the callback ledger from its projection.  The bridge therefore has
+  // a narrow, bearer-authenticated readback that exposes only the terminal
+  // status and immutable callback binding needed by AgentOS reconciliation.
+  router.get("/agentos-runtime/v1/runs/:runId/attempts/:attempt/callbacks/:eventId/run", async (req, res) => {
+    const config = readConfig(env);
+    if (!config) return reject(res, 404, "callback_disabled");
+    const runId = String(req.params.runId);
+    const attempt = Number(req.params.attempt);
+    const eventId = String(req.params.eventId);
+    if (!UUID_RE.test(runId) || !UUID_RE.test(eventId) || !Number.isInteger(attempt) || attempt < 1 || attempt > 100
+      || !verifyBearer(req, config.token)) return reject(res, 401, "callback_unauthorized");
+    const run = await db.select({
+      id: heartbeatRuns.id,
+      companyId: heartbeatRuns.companyId,
+      status: heartbeatRuns.status,
+      resultJson: heartbeatRuns.resultJson,
+    }).from(heartbeatRuns).where(eq(heartbeatRuns.id, runId)).then((rows) => rows[0] ?? null);
+    if (!run) return reject(res, 404, "run_not_found");
+    const callback = readStoredCallback(run.resultJson);
+    if (!callback || callback.runId !== runId || callback.eventId !== eventId || callback.attempt !== attempt) {
+      return reject(res, 404, "callback_not_found");
+    }
+    if (callback.companyId !== run.companyId) return reject(res, 409, "callback_run_binding_mismatch");
+    return res.json({
+      id: run.id,
+      companyId: run.companyId,
+      status: run.status,
+      runtimeCallbackEventId: callback.eventId,
+      runtimeCallbackStatus: callback.status,
+      runtimeCallbackPayloadSha256: callback.payloadSha256,
+    });
+  });
   return router;
 }
 

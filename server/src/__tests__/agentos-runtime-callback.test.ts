@@ -133,6 +133,18 @@ describe("AgentOS runtime callback receiver", () => {
       .set("authorization", `Bearer ${token}`);
     expect(readback.status).toBe(200);
     expect(readback.body).toMatchObject({ accepted: true, eventId, status: "succeeded" });
+
+    const runReadback = await request(app)
+      .get(`/api/agentos-runtime/v1/runs/${runId}/attempts/1/callbacks/${eventId}/run`)
+      .set("authorization", `Bearer ${token}`);
+    expect(runReadback.status).toBe(200);
+    expect(runReadback.body).toMatchObject({
+      id: runId,
+      companyId,
+      status: "succeeded",
+      runtimeCallbackEventId: eventId,
+      runtimeCallbackStatus: "succeeded",
+    });
   });
 
   it("projects a failed callback to both canonical error fields and audits it", async () => {
@@ -150,6 +162,27 @@ describe("AgentOS runtime callback receiver", () => {
     expect(run.error).toBe("provider_quota");
     expect(run.errorCode).toBe("provider_quota");
     expect(activityEntries).toHaveLength(1);
+  });
+
+  it("fails closed when a stored callback is bound to another run", async () => {
+    const { app, run } = createApp();
+    const signed = await signedBody();
+    const response = await request(app)
+      .post(`/api/agentos-runtime/v1/runs/${runId}/attempts/1/callbacks`)
+      .set("content-type", "application/json")
+      .set("authorization", `Bearer ${token}`)
+      .set("idempotency-key", eventId)
+      .set("x-agentos-paperclip-signature", signed.signature)
+      .send(signed.body);
+    expect(response.status).toBe(202);
+    const stored = run.resultJson as { agentosRuntimeCallback: { runId: string } };
+    stored.agentosRuntimeCallback.runId = "66666666-6666-4666-8666-666666666666";
+
+    const readback = await request(app)
+      .get(`/api/agentos-runtime/v1/runs/${runId}/attempts/1/callbacks/${eventId}/run`)
+      .set("authorization", `Bearer ${token}`);
+    expect(readback.status).toBe(404);
+    expect(readback.body.error).toBe("callback_not_found");
   });
 
   it("rejects a tampered callback body with an invalid signature", async () => {
