@@ -7380,6 +7380,22 @@ function isHeartbeatRunTerminalStatus(
   );
 }
 
+/**
+ * AgentOS may terminalize the heartbeat row while the adapter request is still
+ * returning. Paperclip remains the single writer for the rest of the run
+ * lifecycle, so it may reconcile metadata only when the callback's terminal
+ * status is exactly the adapter's computed outcome. A conflicting terminal
+ * status belongs to the path that won the compare-and-set and is never
+ * overwritten here.
+ */
+export function shouldReconcilePreterminalizedAgentOsRun(input: {
+  adapterType: string;
+  currentStatus: string | null | undefined;
+  expectedStatus: string;
+}) {
+  return input.adapterType === "agentos_runtime" && input.currentStatus === input.expectedStatus;
+}
+
 
 function isHeartbeatRunRuntimeStatusActive(
   status: string | null | undefined,
@@ -21426,7 +21442,7 @@ export function heartbeatService(
           usageBasis: adapterResult.usageBasis ?? null,
         });
         const normalizedUsage = sessionUsageResolution.normalizedUsage;
-        const runErrorMessage =
+        let runErrorMessage =
           outcome === "cancelled"
             ? (latestRun?.error ?? adapterResult.errorMessage ?? "Cancelled")
             : outcome === "succeeded"
@@ -21438,7 +21454,7 @@ export function heartbeatService(
                 );
         const recordedResponsibleUserDenialCode =
           normalizeResponsibleUserDenialCode(latestRun?.errorCode);
-        const runErrorCode =
+        let runErrorCode =
           outcome === "timed_out"
             ? "timeout"
             : outcome === "cancelled"
@@ -21547,7 +21563,7 @@ export function heartbeatService(
           mergeRunStopMetadataForAgent(agent, outcome, {
             resultJson: mergeAdapterRecoveryMetadata({
               resultJson: {
-                ...(adapterResult.nativeFinalization
+                ...(adapterResult.nativeFinalization || agent.adapterType === "agentos_runtime"
                   ? parseObject(latestRun?.resultJson)
                   : {}),
                 ...parseObject(adapterResult.resultJson),
@@ -21595,14 +21611,27 @@ export function heartbeatService(
           // Only complete the late metadata write when the reconciler chose the
           // same terminal status; a conflicting terminal outcome remains owned
           // by the path that won the compare-and-set.
-          if (
-            adapterResult.nativeFinalization &&
-            persistedRunWrite.run?.status === status
-          ) {
+          const shouldReconcileAgentOsRun = shouldReconcilePreterminalizedAgentOsRun({
+            adapterType: agent.adapterType,
+            currentStatus: persistedRunWrite.run?.status,
+            expectedStatus: status,
+          });
+          if (adapterResult.nativeFinalization || shouldReconcileAgentOsRun) {
+            // AgentOS may have already terminalized this row and attached the
+            // authoritative provider failure. Preserve those fields for the
+            // late Paperclip lifecycle write; otherwise the generic adapter
+            // result would erase the callback's error from the run, wakeup,
+            // and agent projections.
+            if (shouldReconcileAgentOsRun && persistedRunWrite.run) {
+              runErrorMessage = persistedRunWrite.run.error ?? runErrorMessage;
+              runErrorCode = persistedRunWrite.run.errorCode ?? runErrorCode;
+            }
             persistedRun = await db
               .update(heartbeatRuns)
               .set({
                 ...finalRunPatch,
+                error: runErrorMessage,
+                errorCode: runErrorCode,
                 finishedAt:
                   persistedRunWrite.run.finishedAt ?? finalRunPatch.finishedAt,
                 updatedAt: new Date(),

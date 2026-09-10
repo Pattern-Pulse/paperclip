@@ -62,6 +62,41 @@ AgentOS runtime execution disabled until both sides are deployed and the
 signed POST, replay, GET receipt, and final status projection have been
 verified.
 
+## Paperclip-to-AgentOS execution adapter (implemented, not activated)
+
+The fork now also contains the narrow `agentos_runtime` server adapter under
+`server/src/adapters/agentos-runtime/`. It is deliberately separate from the
+generic HTTP adapter. For each Paperclip heartbeat run it builds the strict
+`paperclip-agentos-runtime-run/v1` envelope, signs the exact raw JSON with the
+host-only Ed25519 private key, and sends it through the SSRF-protected HTTP
+boundary. The endpoint must match the host-only
+`PAPERCLIP_AGENTOS_RUNTIME_URL` and the canonical AgentOS runtime path; an
+adapter-configured alternate host is rejected. Invalid timeouts, missing
+identity/configuration, non-terminal `202` responses, and failed AgentOS
+states fail closed rather than being reported as a successful Paperclip run.
+
+The adapter requires explicit non-secret scope/identity fields in its config
+(AgentOS agent ID, Paperclip project, owner hash, provider/model, provider
+connection epoch, configuration revision, and sorted capabilities). The
+private signing key and key id are never persisted in agent configuration:
+`PAPERCLIP_AGENTOS_RUNTIME_SIGNING_PRIVATE_KEY_B64` and
+`PAPERCLIP_AGENTOS_RUNTIME_SIGNING_KEY_ID` are host-only environment values.
+The adapter has unit coverage for signature verification, scope validation,
+routine/trigger pairing, terminal success, and pending-response rejection.
+It is registered but not assigned to the live Chief of Staff agent yet; the
+AgentOS gateway/execution flags remain disabled until a queued/running canary
+is explicitly bound and the controlled status-mutating E2E is completed.
+
+The heartbeat finalizer also has an explicit AgentOS reconciliation path. If a
+validated callback has already terminalized the run, Paperclip reconciles only
+when its computed terminal status agrees with the callback; a conflicting
+compare-and-set result remains authoritative. Same-status reconciliation keeps
+the callback's result receipt, error, and error code as the source of truth,
+then continues the normal wakeup, issue-lock, lifecycle-audit, presentation,
+and agent-status finalizers. This behavior is covered by an embedded-Postgres
+integration test that simulates the callback race and verifies the projections
+are completed once without losing the callback-specific failure.
+
 ## Pattern & Pulse image publication and host cutover (2026-09-10)
 
 The Pattern-Pulse organization keeps its Actions policy in `selected` mode;
