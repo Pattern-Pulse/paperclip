@@ -52,7 +52,7 @@ function createApp(options: { initialStatus?: string; failAudit?: boolean; issue
   const run: Record<string, unknown> = {
     id: runId, companyId, agentId, contextSnapshot: { issueId }, status: options.initialStatus ?? "queued", resultJson: null,
   };
-  const issue: Record<string, unknown> = { id: issueId, companyId, status: "in_progress", assigneeAgentId: agentId, assigneeUserId: null };
+  const issue: Record<string, unknown> = { id: issueId, companyId, status: "in_progress", assigneeAgentId: agentId, assigneeUserId: null, checkoutRunId: runId, executionRunId: runId };
   const activityEntries: unknown[] = [];
   const queryFor = (table: unknown) => ({
     from: vi.fn().mockReturnThis(),
@@ -129,7 +129,7 @@ function createApp(options: { initialStatus?: string; failAudit?: boolean; issue
     },
   }));
   app.use(express.json({ verify: captureRawBody }));
-  return { app, run, activityEntries };
+  return { app, run, issue, activityEntries };
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -220,6 +220,24 @@ describe("AgentOS runtime callback receiver", () => {
       .send(signed.body);
     expect(response.status).toBe(409);
     expect(response.body.error).toBe("callback_issue_update_conflict");
+    expect(run.status).toBe("queued");
+    expect(run.resultJson).toBeNull();
+    expect(activityEntries).toHaveLength(0);
+  });
+
+  it("rejects a callback after the issue has been taken by another run", async () => {
+    const { app, run, issue, activityEntries } = createApp();
+    issue.executionRunId = "66666666-6666-4666-8666-666666666666";
+    const signed = await signedBody({ disposition: "done" });
+    const response = await request(app)
+      .post(`/api/agentos-runtime/v1/runs/${runId}/attempts/1/callbacks`)
+      .set("content-type", "application/json")
+      .set("authorization", `Bearer ${token}`)
+      .set("idempotency-key", eventId)
+      .set("x-agentos-paperclip-signature", signed.signature)
+      .send(signed.body);
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe("callback_issue_authority_conflict");
     expect(run.status).toBe("queued");
     expect(run.resultJson).toBeNull();
     expect(activityEntries).toHaveLength(0);

@@ -260,11 +260,13 @@ export function agentosRuntimeCallbackRoutes(
         updatedAt: new Date(acceptedAt),
       }).where(and(eq(heartbeatRuns.id, runId), eq(heartbeatRuns.companyId, payload.companyId)));
       if (payload.status === "succeeded" && payload.disposition === "done") {
-        const issue = await tx.select({ id: issues.id, status: issues.status, assigneeAgentId: issues.assigneeAgentId, assigneeUserId: issues.assigneeUserId })
+        const issue = await tx.select({ id: issues.id, status: issues.status, assigneeAgentId: issues.assigneeAgentId, assigneeUserId: issues.assigneeUserId, checkoutRunId: issues.checkoutRunId, executionRunId: issues.executionRunId })
           .from(issues).where(and(eq(issues.id, payload.issueId), eq(issues.companyId, payload.companyId))).for("update")
           .then((rows) => rows[0] ?? null);
         if (!issue) throw new RuntimeCallbackProjectionError("callback_issue_not_found");
-        if (issue.status === "done" || issue.status === "cancelled"
+        if (issue.status !== "in_progress"
+          || (issue.checkoutRunId !== null && issue.checkoutRunId !== runId)
+          || (issue.executionRunId !== null && issue.executionRunId !== runId)
           || issue.assigneeAgentId !== payload.agentId || issue.assigneeUserId !== null) {
           throw new RuntimeCallbackProjectionError("callback_issue_authority_conflict");
         }
