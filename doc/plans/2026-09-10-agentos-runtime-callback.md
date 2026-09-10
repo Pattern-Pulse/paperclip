@@ -95,7 +95,7 @@ unchanged, and Plane/AgentOS containers were untouched.
 The callback environment is now present in the Paperclip app, but the AgentOS
 runtime gateway/execution flags remain disabled. Live read-only acceptance is
 proved by `/api/health` returning the exact build commit, an unauthenticated
-empty-body callback returning `401 callback_unauthorized`, and a correctly
+`{}` JSON callback returning `401 callback_unauthorized`, and a correctly
 signed callback for an unknown run returning `404 run_not_found` without a
 write. A terminal-only database state
 currently has no queued/running run, so a real status-mutating callback E2E is
