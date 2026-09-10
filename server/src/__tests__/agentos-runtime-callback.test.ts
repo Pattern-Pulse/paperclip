@@ -1,6 +1,7 @@
 import express from "express";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { issues } from "@paperclipai/db";
 import { agentosRuntimeCallbackInternals, agentosRuntimeCallbackRoutes } from "../routes/agentos-runtime.js";
 
 const runId = "11111111-1111-4111-8111-111111111111";
@@ -22,9 +23,15 @@ function payload(overrides: Record<string, unknown> = {}) {
     agentId,
     status: "succeeded",
     outputSha256: "a".repeat(64),
+    result: "ok",
+    disposition: "done",
     ...overrides,
   };
-  if (value.status === "failed") delete value.outputSha256;
+  if (value.status === "failed") {
+    delete value.outputSha256;
+    delete value.result;
+    delete value.disposition;
+  }
   return value;
 }
 
@@ -41,32 +48,51 @@ async function signedBody(overrides: Record<string, unknown> = {}) {
   return { body, signature };
 }
 
-function createApp(options: { initialStatus?: string; failAudit?: boolean } = {}) {
+function createApp(options: { initialStatus?: string; failAudit?: boolean; issuePresent?: boolean; issueUpdateRows?: number } = {}) {
   const run: Record<string, unknown> = {
-    id: runId, companyId, agentId, status: options.initialStatus ?? "queued", resultJson: null,
+    id: runId, companyId, agentId, contextSnapshot: { issueId }, status: options.initialStatus ?? "queued", resultJson: null,
   };
+  const issue: Record<string, unknown> = { id: issueId, companyId, status: "in_progress", assigneeAgentId: agentId, assigneeUserId: null };
   const activityEntries: unknown[] = [];
-  const query = {
+  const queryFor = (table: unknown) => ({
     from: vi.fn().mockReturnThis(),
     where: vi.fn().mockReturnThis(),
     for: vi.fn().mockReturnThis(),
-    then: (resolve: (rows: unknown[]) => unknown) => Promise.resolve([run]).then(resolve),
-  };
+    then: (resolve: (rows: unknown[]) => unknown) => Promise.resolve(table === issues ? (options.issuePresent === false ? [] : [issue]) : [run]).then(resolve),
+  });
   const db = {
-    select: vi.fn(() => query),
+    select: vi.fn(() => queryFor(undefined)),
     transaction: vi.fn(async (callback: (tx: unknown) => unknown) => {
       const snapshot = { ...run };
       const activityCount = activityEntries.length;
       try {
         return await callback({
-      select: vi.fn(() => query),
-      update: vi.fn(() => ({
-        set: vi.fn((values: Record<string, unknown>) => ({
-          where: vi.fn(async () => {
-            Object.assign(run, values);
-            return { rowCount: 1 };
-          }),
-        })),
+      select: vi.fn((selection: Record<string, unknown>) => {
+        const table = Object.values(selection).some((column) => column === issues.id || column === issues.status) ? issues : undefined;
+        return queryFor(table);
+      }),
+      update: vi.fn((table: unknown) => ({
+        set: vi.fn((values: Record<string, unknown>) => {
+          const isIssueUpdate = table === issues;
+          const whereResult = isIssueUpdate
+            ? Array.from({ length: options.issueUpdateRows ?? 1 }, () => ({ id: issueId }))
+            : { rowCount: 1 };
+          const whereBuilder = {
+            returning: vi.fn(async () => {
+              if (options.issueUpdateRows !== undefined) return Array.from({ length: options.issueUpdateRows }, () => ({ id: issueId }));
+              Object.assign(issue, values);
+              return [{ id: issueId }];
+            }),
+            then: (resolve: (value: unknown) => unknown) => Promise.resolve(whereResult).then(resolve),
+          };
+          const builder = {
+            where: vi.fn(() => {
+              if (!isIssueUpdate) Object.assign(run, values);
+              return whereBuilder;
+            }),
+          };
+          return builder;
+        }),
       })),
           insert: vi.fn(() => ({ values: vi.fn(async (values: unknown) => {
             if (options.failAudit) throw new Error("audit insert failed");
@@ -94,6 +120,13 @@ function createApp(options: { initialStatus?: string; failAudit?: boolean } = {}
     PAPERCLIP_AGENTOS_RUNTIME_CALLBACK_TOKEN: token,
     PAPERCLIP_AGENTOS_RUNTIME_CALLBACK_SIGNING_SECRET: secret,
     PAPERCLIP_AGENTOS_RUNTIME_CALLBACK_SIGNING_KEY_ID: keyId,
+  }, {
+    projectIssueDisposition: async (_tx, input) => {
+      if (options.issuePresent === false) return null;
+      if (options.issueUpdateRows === 0) return null;
+      issue.status = "done";
+      return { id: input.issueId, status: "done" };
+    },
   }));
   app.use(express.json({ verify: captureRawBody }));
   return { app, run, activityEntries };
@@ -102,15 +135,24 @@ function createApp(options: { initialStatus?: string; failAudit?: boolean } = {}
 afterEach(() => vi.restoreAllMocks());
 
 describe("AgentOS runtime callback receiver", () => {
+  it("validates the explicit done disposition and structured result", async () => {
+    const done = await signedBody({ disposition: "done" });
+    expect(agentosRuntimeCallbackInternals.parseEnvelope(JSON.parse(done.body))).not.toBeNull();
+    const unsupported = await signedBody({ disposition: "in_review" });
+    expect(agentosRuntimeCallbackInternals.parseEnvelope(JSON.parse(unsupported.body))).toBeNull();
+    const missingResult = await signedBody({ result: "" });
+    expect(agentosRuntimeCallbackInternals.parseEnvelope(JSON.parse(missingResult.body))).toBeNull();
+  });
+
   it("accepts a signed callback, projects terminal status, and returns the same receipt on replay", async () => {
     const { app, run } = createApp();
-    const signed = await signedBody();
+    const signed = await signedBody({ disposition: "done" });
     const first = await request(app)
       .post(`/api/agentos-runtime/v1/runs/${runId}/attempts/1/callbacks`)
       .set("content-type", "application/json")
       .set("authorization", `Bearer ${token}`)
       .set("idempotency-key", eventId)
-      .set("x-agentos-paperclip-signature", signed.signature)
+    .set("x-agentos-paperclip-signature", signed.signature)
       .send(signed.body);
     expect(first.status).toBe(202);
     expect(first.body).toMatchObject({ accepted: true, eventId, status: "succeeded", replay: false });
@@ -144,7 +186,43 @@ describe("AgentOS runtime callback receiver", () => {
       status: "succeeded",
       runtimeCallbackEventId: eventId,
       runtimeCallbackStatus: "succeeded",
+      runtimeCallbackResult: "ok",
+      runtimeCallbackDisposition: "done",
     });
+  });
+
+  it("rolls back the run and audit when the disposition issue is missing", async () => {
+    const { app, run, activityEntries } = createApp({ issuePresent: false });
+    const signed = await signedBody({ disposition: "done" });
+    const response = await request(app)
+      .post(`/api/agentos-runtime/v1/runs/${runId}/attempts/1/callbacks`)
+      .set("content-type", "application/json")
+      .set("authorization", `Bearer ${token}`)
+      .set("idempotency-key", eventId)
+      .set("x-agentos-paperclip-signature", signed.signature)
+      .send(signed.body);
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe("callback_issue_not_found");
+    expect(run.status).toBe("queued");
+    expect(run.resultJson).toBeNull();
+    expect(activityEntries).toHaveLength(0);
+  });
+
+  it("rolls back the run and audit when the disposition update loses its row", async () => {
+    const { app, run, activityEntries } = createApp({ issueUpdateRows: 0 });
+    const signed = await signedBody({ disposition: "done" });
+    const response = await request(app)
+      .post(`/api/agentos-runtime/v1/runs/${runId}/attempts/1/callbacks`)
+      .set("content-type", "application/json")
+      .set("authorization", `Bearer ${token}`)
+      .set("idempotency-key", eventId)
+      .set("x-agentos-paperclip-signature", signed.signature)
+      .send(signed.body);
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe("callback_issue_update_conflict");
+    expect(run.status).toBe("queued");
+    expect(run.resultJson).toBeNull();
+    expect(activityEntries).toHaveLength(0);
   });
 
   it("projects a failed callback to both canonical error fields and audits it", async () => {

@@ -2,8 +2,9 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { Request, Response } from "express";
 import { Router } from "express";
 import { and, eq } from "drizzle-orm";
-import { activityLog, heartbeatRuns } from "@paperclipai/db";
+import { activityLog, heartbeatRuns, issues } from "@paperclipai/db";
 import type { Db } from "@paperclipai/db";
+import { issueService } from "../services/issues.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -18,6 +19,7 @@ const CALLBACK_SUFFIX = "/callbacks";
 const RECEIPT_VERSION = "paperclip-agentos-runtime-callback-receipt/v1";
 
 type CallbackStatus = "succeeded" | "failed";
+type RuntimeDisposition = "done";
 type CallbackPayload = {
   version: "paperclip-runtime-callback/v1";
   companyId: string;
@@ -27,7 +29,9 @@ type CallbackPayload = {
   agentId: string;
   status: CallbackStatus;
   outputSha256?: string;
+  result?: string;
   errorCode?: string;
+  disposition?: RuntimeDisposition;
 };
 
 type CallbackEnvelope = {
@@ -43,8 +47,28 @@ type StoredCallback = {
   attempt: number;
   payloadSha256: string;
   status: CallbackStatus;
+  result?: string;
+  disposition?: RuntimeDisposition;
   acceptedAt: string;
 };
+
+type CallbackTransactionResult =
+  | { kind: "missing" | "conflict" | "binding" | "terminal" }
+  | { kind: "replay" | "accepted"; callback: StoredCallback };
+
+type RuntimeIssueProjector = (tx: Db, input: {
+  issueId: string;
+  companyId: string;
+  agentId: string;
+  result: string;
+}) => Promise<{ id: string; status: string } | null>;
+
+class RuntimeCallbackProjectionError extends Error {
+  constructor(readonly code: "callback_issue_not_found" | "callback_issue_authority_conflict" | "callback_issue_update_conflict") {
+    super(code);
+    this.name = "RuntimeCallbackProjectionError";
+  }
+}
 
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
@@ -113,7 +137,7 @@ function parseEnvelope(value: unknown): CallbackEnvelope | null {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
   const body = payload as Record<string, unknown>;
   const allowedPayloadKeys = body.status === "succeeded"
-    ? ["version", "companyId", "runId", "attempt", "issueId", "agentId", "status", "outputSha256"]
+    ? ["version", "companyId", "runId", "attempt", "issueId", "agentId", "status", "outputSha256", "result", "disposition"]
     : ["version", "companyId", "runId", "attempt", "issueId", "agentId", "status", "errorCode"];
   if (Object.keys(body).some((key) => !allowedPayloadKeys.includes(key))) return null;
   if (typeof candidate.eventId !== "string" || !UUID_RE.test(candidate.eventId)
@@ -126,7 +150,8 @@ function parseEnvelope(value: unknown): CallbackEnvelope | null {
     || typeof body.agentId !== "string" || !UUID_RE.test(body.agentId)
     || (body.status !== "succeeded" && body.status !== "failed")) return null;
   if (body.status === "succeeded") {
-    if (typeof body.outputSha256 !== "string" || !SHA256_RE.test(body.outputSha256) || body.errorCode !== undefined) return null;
+    if (typeof body.outputSha256 !== "string" || !SHA256_RE.test(body.outputSha256) || typeof body.result !== "string"
+      || !body.result.trim() || body.result.length > 10000 || body.disposition !== "done" || body.errorCode !== undefined) return null;
   } else if (typeof body.errorCode !== "string" || !ERROR_CODE_RE.test(body.errorCode) || body.outputSha256 !== undefined) return null;
   return {
     eventId: candidate.eventId,
@@ -169,8 +194,17 @@ async function loadCallback(db: Db, runId: string, eventId: string): Promise<Sto
   return callback?.eventId === eventId ? callback : null;
 }
 
-export function agentosRuntimeCallbackRoutes(db: Db, env: NodeJS.ProcessEnv = process.env): Router {
+export function agentosRuntimeCallbackRoutes(
+  db: Db,
+  env: NodeJS.ProcessEnv = process.env,
+  options: { projectIssueDisposition?: RuntimeIssueProjector } = {},
+): Router {
   const router = Router();
+  const projectIssueDisposition = options.projectIssueDisposition ?? (async (tx, input) => issueService(tx).update(input.issueId, {
+    status: "done",
+    actorAgentId: input.agentId,
+    actorUserId: null,
+  }) as Promise<{ id: string; status: string } | null>);
 
   router.post("/agentos-runtime/v1/runs/:runId/attempts/:attempt/callbacks", async (req, res) => {
     const config = readConfig(env);
@@ -192,11 +226,14 @@ export function agentosRuntimeCallbackRoutes(db: Db, env: NodeJS.ProcessEnv = pr
     const payload = envelope.payload;
     if (payload.runId !== runId || payload.attempt !== attempt) return reject(res, 409, "callback_binding_mismatch");
 
-    const result = await db.transaction(async (tx) => {
+    let result: CallbackTransactionResult;
+    try {
+      result = await db.transaction(async (tx) => {
       const run = await tx.select({
         id: heartbeatRuns.id,
         companyId: heartbeatRuns.companyId,
         agentId: heartbeatRuns.agentId,
+        contextSnapshot: heartbeatRuns.contextSnapshot,
         status: heartbeatRuns.status,
         resultJson: heartbeatRuns.resultJson,
       }).from(heartbeatRuns).where(eq(heartbeatRuns.id, runId)).for("update").then((rows) => rows[0] ?? null);
@@ -206,11 +243,13 @@ export function agentosRuntimeCallbackRoutes(db: Db, env: NodeJS.ProcessEnv = pr
         if (existing.eventId === envelope.eventId && existing.payloadSha256 === envelope.payloadSha256) return { kind: "replay" as const, callback: existing };
         return { kind: "conflict" as const };
       }
-      if (run.companyId !== payload.companyId || run.agentId !== payload.agentId) return { kind: "binding" as const };
+      const contextIssueId = run.contextSnapshot && typeof run.contextSnapshot === "object" && !Array.isArray(run.contextSnapshot)
+        ? (run.contextSnapshot as Record<string, unknown>).issueId : null;
+      if (run.companyId !== payload.companyId || run.agentId !== payload.agentId || contextIssueId !== payload.issueId) return { kind: "binding" as const };
       if (!["queued", "running"].includes(run.status)) return { kind: "terminal" as const };
       const acceptedAt = new Date().toISOString();
       const callback: StoredCallback = { eventId: envelope.eventId, companyId: payload.companyId, runId, attempt,
-        payloadSha256: envelope.payloadSha256, status: payload.status, acceptedAt };
+        payloadSha256: envelope.payloadSha256, status: payload.status, result: payload.result, disposition: payload.disposition, acceptedAt };
       const current = run.resultJson && typeof run.resultJson === "object" && !Array.isArray(run.resultJson) ? run.resultJson : {};
       await tx.update(heartbeatRuns).set({
         status: payload.status,
@@ -220,6 +259,22 @@ export function agentosRuntimeCallbackRoutes(db: Db, env: NodeJS.ProcessEnv = pr
         resultJson: { ...current, agentosRuntimeCallback: callback },
         updatedAt: new Date(acceptedAt),
       }).where(and(eq(heartbeatRuns.id, runId), eq(heartbeatRuns.companyId, payload.companyId)));
+      if (payload.status === "succeeded" && payload.disposition === "done") {
+        const issue = await tx.select({ id: issues.id, status: issues.status, assigneeAgentId: issues.assigneeAgentId, assigneeUserId: issues.assigneeUserId })
+          .from(issues).where(and(eq(issues.id, payload.issueId), eq(issues.companyId, payload.companyId))).for("update")
+          .then((rows) => rows[0] ?? null);
+        if (!issue) throw new RuntimeCallbackProjectionError("callback_issue_not_found");
+        if (issue.status === "done" || issue.status === "cancelled"
+          || issue.assigneeAgentId !== payload.agentId || issue.assigneeUserId !== null) {
+          throw new RuntimeCallbackProjectionError("callback_issue_authority_conflict");
+        }
+        const projected = await projectIssueDisposition(tx as unknown as Db, {
+          issueId: payload.issueId, companyId: payload.companyId, agentId: payload.agentId, result: payload.result!,
+        });
+        if (!projected || projected.id !== payload.issueId || projected.status !== "done") {
+          throw new RuntimeCallbackProjectionError("callback_issue_update_conflict");
+        }
+      }
       await tx.insert(activityLog).values({
         companyId: payload.companyId,
         actorType: "agent",
@@ -233,15 +288,23 @@ export function agentosRuntimeCallbackRoutes(db: Db, env: NodeJS.ProcessEnv = pr
           eventId: envelope.eventId,
           attempt,
           status: payload.status,
+          disposition: payload.disposition ?? null,
+          issueId: payload.issueId,
+          resultSha256: payload.result ? sha256(payload.result) : null,
           payloadSha256: envelope.payloadSha256,
         },
       });
       return { kind: "accepted" as const, callback };
-    });
+      });
+    } catch (error) {
+      if (error instanceof RuntimeCallbackProjectionError) return reject(res, 409, error.code);
+      throw error;
+    }
     if (result.kind === "missing") return reject(res, 404, "run_not_found");
     if (result.kind === "conflict") return reject(res, 409, "callback_event_conflict");
     if (result.kind === "binding") return reject(res, 409, "callback_run_binding_mismatch");
     if (result.kind === "terminal") return reject(res, 409, "callback_run_already_terminal");
+    if (result.kind !== "replay" && result.kind !== "accepted") return reject(res, 500, "callback_transaction_invalid");
     return res.status(result.kind === "replay" ? 200 : 202).json(receipt(result.callback, result.kind === "replay"));
   });
 
@@ -289,6 +352,8 @@ export function agentosRuntimeCallbackRoutes(db: Db, env: NodeJS.ProcessEnv = pr
       runtimeCallbackEventId: callback.eventId,
       runtimeCallbackStatus: callback.status,
       runtimeCallbackPayloadSha256: callback.payloadSha256,
+      ...(callback.result !== undefined ? { runtimeCallbackResult: callback.result } : {}),
+      ...(callback.disposition !== undefined ? { runtimeCallbackDisposition: callback.disposition } : {}),
     });
   });
   return router;
