@@ -36,6 +36,40 @@ function readFrom(config: RuntimeConfig, context: RuntimeContext, key: string): 
   return config[key] ?? context[key];
 }
 
+/**
+ * Issue/project identity belongs to the Paperclip heartbeat-run context, not
+ * to adapter configuration. Keep the context authoritative and reject a
+ * conflicting configured value instead of silently letting config retarget a
+ * signed run. A missing context value is also rejected: the runtime adapter
+ * must only be used for a canonical issue-bound heartbeat run.
+ */
+function readRunBoundIdentity(config: RuntimeConfig, context: RuntimeContext, key: "projectId" | "issueId"): string {
+  const contextValue = stringValue(context[key]);
+  const configValue = stringValue(config[key]);
+  if (!contextValue) throw new Error(`agentos_runtime_${key}_run_context_missing`);
+  if (configValue && configValue !== contextValue) {
+    throw new Error(`agentos_runtime_${key}_config_context_mismatch`);
+  }
+  return contextValue;
+}
+
+function readRunBoundIssueId(config: RuntimeConfig, context: RuntimeContext): string {
+  const contextIssueId = stringValue(context.issueId);
+  const contextTaskId = stringValue(context.taskId);
+  if (contextIssueId && contextTaskId && contextIssueId !== contextTaskId) {
+    throw new Error("agentos_runtime_issueId_run_context_mismatch");
+  }
+  const canonicalIssueId = contextIssueId ?? contextTaskId;
+  if (!canonicalIssueId) throw new Error("agentos_runtime_issueId_run_context_missing");
+  for (const [key, value] of [["issueId", config.issueId], ["taskId", config.taskId]] as const) {
+    const configured = stringValue(value);
+    if (configured && configured !== canonicalIssueId) {
+      throw new Error("agentos_runtime_issueId_config_context_mismatch");
+    }
+  }
+  return canonicalIssueId;
+}
+
 function sortedCapabilities(value: unknown): string[] {
   if (typeof value === "string") {
     try { value = JSON.parse(value); } catch { throw new Error("agentos_runtime_capabilities_invalid"); }
@@ -79,8 +113,8 @@ export function buildAgentOsRuntimeContract(input: AgentOsRuntimeContractInput) 
   const runId = uuid(input.runId, "run_id");
   const paperclipAgentId = uuid(input.agentId, "agent_id");
   const companyId = uuid(input.companyId, "company_id");
-  const projectId = uuid(readFrom(input.config, input.context, "projectId"), "project_id");
-  const issueId = uuid(readFrom(input.config, input.context, "issueId") ?? readFrom(input.config, input.context, "taskId"), "issue_id");
+  const projectId = uuid(readRunBoundIdentity(input.config, input.context, "projectId"), "project_id");
+  const issueId = uuid(readRunBoundIssueId(input.config, input.context), "issue_id");
   const agentOsAgentId = stringValue(readFrom(input.config, input.context, "agentOsAgentId"));
   if (!agentOsAgentId || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentOsAgentId)) {
     throw new Error("agentos_runtime_agent_os_agent_id_invalid");

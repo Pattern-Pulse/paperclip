@@ -17,7 +17,10 @@ const fixed = {
     revision: 3,
     capabilities: ["action:paperclip.create_issue", "adapter:codex"],
   },
-  context: {},
+  context: {
+    projectId: "44444444-4444-4444-8444-444444444444",
+    issueId: "55555555-5555-4555-8555-555555555555",
+  },
 };
 
 afterEach(() => {
@@ -41,6 +44,36 @@ describe("agentos runtime contract", () => {
       ...fixed, attempt: 1,
       config: { ...fixed.config, capabilities: ["adapter:codex", "adapter:codex"] },
     })).toThrow("agentos_runtime_capabilities_must_be_sorted_unique");
+  });
+
+  it("binds project and issue to the server-owned Paperclip run context", () => {
+    process.env.PAPERCLIP_AGENTOS_RUNTIME_SIGNING_KEY_ID = "test-key";
+    expect(() => buildAgentOsRuntimeContract({
+      ...fixed,
+      attempt: 1,
+      config: { ...fixed.config, projectId: "77777777-7777-4777-8777-777777777777" },
+    })).toThrow("agentos_runtime_projectId_config_context_mismatch");
+    expect(() => buildAgentOsRuntimeContract({
+      ...fixed,
+      attempt: 1,
+      config: { ...fixed.config, issueId: "88888888-8888-4888-8888-888888888888" },
+    })).toThrow("agentos_runtime_issueId_config_context_mismatch");
+    expect(() => buildAgentOsRuntimeContract({
+      ...fixed,
+      attempt: 1,
+      context: { ...fixed.context, issueId: undefined },
+      config: { ...fixed.config, issueId: undefined, taskId: undefined },
+    })).toThrow("agentos_runtime_issueId_run_context_missing");
+    expect(() => buildAgentOsRuntimeContract({
+      ...fixed,
+      attempt: 1,
+      context: { ...fixed.context, taskId: "88888888-8888-4888-8888-888888888888" },
+    })).toThrow("agentos_runtime_issueId_run_context_mismatch");
+    expect(() => buildAgentOsRuntimeContract({
+      ...fixed,
+      attempt: 1,
+      config: { ...fixed.config, taskId: "88888888-8888-4888-8888-888888888888" },
+    })).toThrow("agentos_runtime_issueId_config_context_mismatch");
   });
 
   it("requires routine and trigger to be paired", () => {

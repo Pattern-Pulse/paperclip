@@ -24,7 +24,10 @@ const base = {
   agent: { id: "22222222-2222-4222-8222-222222222222", companyId: "33333333-3333-4333-8333-333333333333", name: "Chief", adapterType: "agentos_runtime", adapterConfig: {} },
   runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
   config,
-  context: {},
+  context: {
+    projectId: config.projectId,
+    issueId: config.issueId,
+  },
   onLog: async () => {},
 };
 

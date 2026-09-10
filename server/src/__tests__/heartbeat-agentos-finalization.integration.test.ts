@@ -9,6 +9,7 @@ import {
   heartbeatRunEvents,
   heartbeatRuns,
   issues,
+  projects,
 } from "@paperclipai/db";
 import type { ServerAdapterModule } from "../adapters/index.js";
 import {
@@ -19,6 +20,7 @@ import {
   heartbeatService,
 } from "../services/heartbeat.ts";
 import { registerServerAdapter, unregisterServerAdapter } from "../adapters/index.js";
+import { buildAgentOsRuntimeContract } from "../adapters/agentos-runtime/contract.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -38,7 +40,15 @@ describeEmbeddedPostgres("AgentOS callback terminalization finalizer", () => {
   const callbackError = "AgentOS provider rejected the controlled run";
   const callbackErrorCode = "agentos_provider_rejected";
   const agentOsExecute = vi.fn<ServerAdapterModule["execute"]>(async ({ runId }) => {
-    if (!callbackIssueId) throw new Error("test issue not initialized");
+    if (!callbackIssueId) {
+      return {
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        summary: "generic test adapter success",
+        resultJson: {},
+      };
+    }
 
     // Model the signed AgentOS callback receiver terminalizing Paperclip before
     // the adapter HTTP request returns. The production finalizer must preserve
@@ -102,6 +112,7 @@ describeEmbeddedPostgres("AgentOS callback terminalization finalizer", () => {
     `));
     callbackIssueId = null;
     agentOsExecute.mockClear();
+    delete process.env.PAPERCLIP_AGENTOS_RUNTIME_SIGNING_KEY_ID;
   });
 
   afterAll(async () => {
@@ -202,5 +213,90 @@ describeEmbeddedPostgres("AgentOS callback terminalization finalizer", () => {
         ),
       );
     expect(lifecycleEvents.filter((event) => event.message === "run failed")).toHaveLength(1);
+  });
+
+  it("binds a normal issueId wake to the database-owned project before the runtime contract is built", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const projectId = randomUUID();
+    const issueId = randomUUID();
+    let adapterContext: Record<string, unknown> | null = null;
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "AgentOS runtime context test",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+      defaultResponsibleUserId: "responsible-user",
+    });
+    await db.insert(projects).values({
+      id: projectId,
+      companyId,
+      name: "Runtime context binding",
+      status: "active",
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "AgentOS runtime context agent",
+      role: "engineer",
+      status: "idle",
+      adapterType: "agentos_runtime",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      projectId,
+      title: "Normal issue wake",
+      status: "in_progress",
+      priority: "high",
+      assigneeAgentId: agentId,
+    });
+
+    agentOsExecute.mockImplementationOnce(async (ctx) => {
+      adapterContext = { ...ctx.context };
+      return {
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        summary: "runtime context captured",
+        resultJson: {},
+      };
+    });
+
+    const queued = await heartbeat.invoke(agentId, "on_demand", { issueId }, "manual");
+    expect(queued).not.toBeNull();
+    await waitForRunToFinish(queued!.id);
+    await heartbeat.drainActiveRunExecutions();
+
+    expect(adapterContext).not.toBeNull();
+    expect(adapterContext).toMatchObject({
+      issueId,
+      taskId: issueId,
+      projectId,
+    });
+    process.env.PAPERCLIP_AGENTOS_RUNTIME_SIGNING_KEY_ID = "test-key";
+    const contract = buildAgentOsRuntimeContract({
+      runId: queued!.id,
+      attempt: 1,
+      agentId,
+      companyId,
+      config: {
+        projectId,
+        issueId,
+        agentOsAgentId: "chief-of-staff",
+        ownerHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        provider: "codex",
+        model: "gpt-5.3-codex",
+        providerConnectionEpoch: randomUUID(),
+        revision: 1,
+        capabilities: ["adapter:codex"],
+      },
+      context: adapterContext ?? {},
+    });
+    expect(contract.scope).toMatchObject({ projectId, issueId });
   });
 });

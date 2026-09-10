@@ -21026,6 +21026,18 @@ export function heartbeatService(
             // heartbeat run snapshot.
             const adapterContext: Record<string, unknown> = {
               ...context,
+              // Issue/project identity is resolved from the database-backed
+              // issue reference above. Never let a user-supplied wake snapshot
+              // retarget the AgentOS runtime contract to another project or
+              // issue. `taskId` remains a compatibility alias, but is written
+              // from the same canonical issue row so both fields agree.
+              ...(issueRef
+                ? {
+                    projectId: issueRef.projectId,
+                    issueId: issueRef.id,
+                    taskId: issueRef.id,
+                  }
+                : {}),
               ...(legacyQuestionResponse
                 ? {
                     [PAPERCLIP_WAKE_PAYLOAD_KEY]: {
